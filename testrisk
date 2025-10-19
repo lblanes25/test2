@@ -18,22 +18,25 @@ RISKS_AE_ID_COL = "Audit Entity ID"
 RISKS_IT_COL = "Information Technology Inherent Risk"
 RISKS_IS_COL = "Information Security Inherent Risk"
 RISKS_PRIMARY_APPS_COL = "Primary IT applications (mapped)"
-RISKS_SECONDARY_APPS_COL = "Secondary IT applications (mapped)"
+RISKS_SECONDARY_APPS_COL = "Secondary IT applications (Related or Relied on)"
+RISKS_CORE_TEAM_COL = "Core Audit Team"
+RISKS_AUDIT_LEADER_COL = "Audit Leader"
 
 # Column names in KPA file (case-insensitive matching will be applied)
-KPA_AE_ID_COL = "Audit Entity"
+KPA_AE_ID_COL = "Audit Entity ID"
 KPA_ID_COL = "KPA ID"
-KPA_KEY_APPS_COL = "KEY PRIMARY & SECONDARY IT applictions"
+KPA_KEY_APPS_COL = "KEY PRIMARY & SECONDARY IT applications"
 
-# Output file names
-OUTPUT_FULL_ANALYSIS = "full_analysis_with_flags.xlsx"
-OUTPUT_CRITICAL_ISSUES = "critical_issues_ghost_apps.xlsx"
-OUTPUT_PRIMARY_ANALYSIS = "primary_apps_not_key_analysis.xlsx"
-OUTPUT_SECONDARY_ANALYSIS = "secondary_apps_not_key_analysis.xlsx"
-OUTPUT_EXECUTIVE_SUMMARY = "executive_summary.xlsx"
+# Output file names - ORGANIZED BY OBSERVATION
+OUTPUT_OBSERVATION_1 = "Observation1_GhostApps.xlsx"
+OUTPUT_OBSERVATION_2 = "Observation2_PrimaryNotKey.xlsx"
+OUTPUT_OBSERVATION_3 = "Observation3_SecondaryNotKey.xlsx"
+OUTPUT_OBSERVATION_4 = "Observation4_AutomationFailures.xlsx"
+OUTPUT_EXECUTIVE_SUMMARY = "00_ExecutiveSummary.xlsx"
+OUTPUT_FULL_ANALYSIS = "SourceData_FullAnalysis.xlsx"
 
 # Risk values that indicate the risk IS applicable
-RISK_APPLICABLE_VALUES = ['Y', 'Yes', 'High', 'Medium', 'Moderate', 'H', 'M']
+RISK_APPLICABLE_VALUES = ['Critical', 'High', 'Medium', 'Low']
 
 # =============================================================================
 # LOAD DATA
@@ -77,6 +80,8 @@ RISKS_IT_ACTUAL = find_column(risks_df, RISKS_IT_COL)
 RISKS_IS_ACTUAL = find_column(risks_df, RISKS_IS_COL)
 RISKS_PRIMARY_APPS_ACTUAL = find_column(risks_df, RISKS_PRIMARY_APPS_COL)
 RISKS_SECONDARY_APPS_ACTUAL = find_column(risks_df, RISKS_SECONDARY_APPS_COL)
+RISKS_CORE_TEAM_ACTUAL = find_column(risks_df, RISKS_CORE_TEAM_COL, optional=True)
+RISKS_AUDIT_LEADER_ACTUAL = find_column(risks_df, RISKS_AUDIT_LEADER_COL, optional=True)
 
 KPA_AE_ID_ACTUAL = find_column(kpa_df, KPA_AE_ID_COL)
 KPA_ID_ACTUAL = find_column(kpa_df, KPA_ID_COL)
@@ -88,6 +93,10 @@ print("="*70)
 print(f"✓ Risks file - AE ID: '{RISKS_AE_ID_ACTUAL}'")
 print(f"✓ Risks file - IT Risk: '{RISKS_IT_ACTUAL}'")
 print(f"✓ Risks file - IS Risk: '{RISKS_IS_ACTUAL}'")
+if RISKS_CORE_TEAM_ACTUAL:
+    print(f"✓ Risks file - Core Team: '{RISKS_CORE_TEAM_ACTUAL}'")
+if RISKS_AUDIT_LEADER_ACTUAL:
+    print(f"✓ Risks file - Audit Leader: '{RISKS_AUDIT_LEADER_ACTUAL}'")
 print(f"✓ KPA file - AE ID: '{KPA_AE_ID_ACTUAL}'")
 print()
 
@@ -114,6 +123,17 @@ risks_df['Secondary_List'] = risks_df[RISKS_SECONDARY_APPS_ACTUAL].apply(split_i
 
 ae_primary_map = dict(zip(risks_df[RISKS_AE_ID_ACTUAL], risks_df['Primary_List']))
 ae_secondary_map = dict(zip(risks_df[RISKS_AE_ID_ACTUAL], risks_df['Secondary_List']))
+
+# Extract team info if available
+if RISKS_CORE_TEAM_ACTUAL:
+    ae_core_team_map = dict(zip(risks_df[RISKS_AE_ID_ACTUAL], risks_df[RISKS_CORE_TEAM_ACTUAL]))
+else:
+    ae_core_team_map = {}
+
+if RISKS_AUDIT_LEADER_ACTUAL:
+    ae_audit_leader_map = dict(zip(risks_df[RISKS_AE_ID_ACTUAL], risks_df[RISKS_AUDIT_LEADER_ACTUAL]))
+else:
+    ae_audit_leader_map = {}
 
 # =============================================================================
 # EXTRACT KEY-TAGGED APPS FROM KPA DATA (PER ENTITY)
@@ -143,26 +163,25 @@ for ae_id in risks_df[RISKS_AE_ID_ACTUAL]:
     primary_apps = ae_primary_map.get(ae_id, [])
     secondary_apps = ae_secondary_map.get(ae_id, [])
     
+    # Get team info
+    core_team = ae_core_team_map.get(ae_id, 'Unknown') if ae_core_team_map else 'Unknown'
+    audit_leader = ae_audit_leader_map.get(ae_id, 'Unknown') if ae_audit_leader_map else 'Unknown'
+    
     # Get all mapped apps
     all_mapped_apps = set(primary_apps + secondary_apps)
     
     # Get Key apps for THIS entity's KPAs
     key_apps_set = kpa_key_map.get(ae_id, set())
     
-    # ========== NEW: GHOST APP DETECTION ==========
-    # Apps tagged as Key in KPAs but NOT mapped to this entity
+    # ========== GHOST APP DETECTION ==========
     ghost_apps = [aid for aid in key_apps_set if aid and aid not in all_mapped_apps]
     
     # ========== PRIMARY APP ANALYSIS ==========
-    # Find which Primary apps are Key
     primary_key = [aid for aid in primary_apps if aid and aid in key_apps_set]
-    # Find which Primary apps are NOT Key
     primary_not_key = [aid for aid in primary_apps if aid and aid not in key_apps_set]
     
     # ========== SECONDARY APP ANALYSIS ==========
-    # Find which Secondary apps are Key
     secondary_key = [aid for aid in secondary_apps if aid and aid in key_apps_set]
-    # Find which Secondary apps are NOT Key
     secondary_not_key = [aid for aid in secondary_apps if aid and aid not in key_apps_set]
     
     # Calculate metrics
@@ -195,6 +214,8 @@ for ae_id in risks_df[RISKS_AE_ID_ACTUAL]:
     # Build output row
     rows.append({
         'Audit Entity ID': ae_id,
+        'Core Audit Team': core_team,
+        'Audit Leader': audit_leader,
         
         # Mapping counts
         'Total Primary Apps': total_primary,
@@ -253,7 +274,7 @@ summary_df['Any IT/IS Risk Applicable'] = summary_df['IT Risk Applicable'] | sum
 # FLAG CRITICAL ISSUES
 # =============================================================================
 
-# CRITICAL: Ghost Apps (Key-tagged but not mapped)
+# CRITICAL: Ghost Apps
 summary_df['CRITICAL: Ghost Apps'] = summary_df['# Ghost Apps (Key but Not Mapped)'] > 0
 
 # HIGH: Primary apps not Key
@@ -269,7 +290,7 @@ summary_df['ANY ISSUE'] = (
     summary_df['HIGH: Secondary Not Key']
 )
 
-# Specific violation patterns
+# Specific patterns for impact analysis
 summary_df['Ghost Apps + No Risk'] = (
     (summary_df['# Ghost Apps (Key but Not Mapped)'] > 0) &
     (~summary_df['Any IT/IS Risk Applicable'])
@@ -277,8 +298,8 @@ summary_df['Ghost Apps + No Risk'] = (
 
 summary_df['Primary Not Key + No Risk'] = (
     (summary_df['# Primary Apps Not Key'] > 0) &
-    (summary_df['Total Primary Key Apps'] == 0) &  # NO Primary apps are Key
-    (summary_df['Total Secondary Key Apps'] == 0) &  # NO Secondary apps are Key either
+    (summary_df['Primary Key Apps'] == 0) &
+    (summary_df['Secondary Key Apps'] == 0) &
     (~summary_df['Any IT/IS Risk Applicable'])
 )
 
@@ -288,218 +309,441 @@ summary_df['Secondary Not Key + No Risk'] = (
     (~summary_df['Any IT/IS Risk Applicable'])
 )
 
+# Automation failures
+summary_df['Primary Key Auto Failure'] = (
+    (summary_df['Primary Key Apps'] > 0) &
+    (~summary_df['Any IT/IS Risk Applicable'])
+)
+
+summary_df['Secondary Key Auto Failure'] = (
+    (summary_df['Secondary Key Apps'] > 0) &
+    (~summary_df['Any IT/IS Risk Applicable'])
+)
+
 # =============================================================================
-# CRITICAL ANALYSIS: GHOST APPS
+# CONSOLE OUTPUT WITH STATISTICS
 # =============================================================================
 
 print("="*70)
-print("CRITICAL ISSUE: GHOST APPLICATIONS")
+print("OBSERVATION 1: GHOST APPLICATIONS")
 print("="*70)
-print()
-print("Ghost Apps = Applications tagged as Key in KPAs but NOT mapped to the entity")
-print("Impact: Risk calculation uses WRONG applications")
 print()
 
 ghost_entities = summary_df[summary_df['CRITICAL: Ghost Apps']]
 total_ghost_apps = summary_df['# Ghost Apps (Key but Not Mapped)'].sum()
 
 if len(ghost_entities) > 0:
-    print(f"⚠️  CRITICAL DATA INTEGRITY ISSUE DETECTED")
-    print(f"   {len(ghost_entities)} entities have ghost applications ({len(ghost_entities)/len(summary_df)*100:.1f}%)")
-    print(f"   {total_ghost_apps} total ghost apps affecting risk calculations")
-    print(f"   ")
-    print(f"   Avg ghost apps per affected entity: {total_ghost_apps/len(ghost_entities):.1f}")
+    print(f"⚠️  CRITICAL DATA INTEGRITY ISSUE")
+    print(f"   Entities affected: {len(ghost_entities)} ({len(ghost_entities)/len(summary_df)*100:.1f}%)")
+    print(f"   Total ghost apps: {int(total_ghost_apps)}")
+    print(f"   Avg per entity: {total_ghost_apps/len(ghost_entities):.1f}")
     
-    # Check how many have wrong risk
     ghost_no_risk = summary_df[summary_df['Ghost Apps + No Risk']]
-    if len(ghost_no_risk) > 0:
-        print(f"   {len(ghost_no_risk)} have ghost apps but NO IT/IS risk (automation failure)")
-    
-    print(f"   ")
-    print(f"   These entities have INCORRECT risk ratings (using wrong apps)")
+    print(f"   With NO IT/IS risk: {len(ghost_no_risk)}")
+    print(f"   With IT/IS risk (using wrong apps): {len(ghost_entities) - len(ghost_no_risk)}")
 else:
     print(f"✓ No ghost applications detected")
 
 print()
 
 # =============================================================================
-# PRIMARY APPS ANALYSIS
-# =============================================================================
 
 print("="*70)
-print("PRIMARY APPLICATIONS NOT TAGGED AS KEY")
+print("OBSERVATION 2: PRIMARY APPS NOT TAGGED AS KEY")
 print("="*70)
 print()
 
-primary_issue_entities = summary_df[summary_df['HIGH: Primary Not Key']]
+primary_issue = summary_df[summary_df['HIGH: Primary Not Key']]
 total_primary_not_key = summary_df['# Primary Apps Not Key'].sum()
+primary_no_risk = summary_df[summary_df['Primary Not Key + No Risk']]
+primary_have_risk = primary_issue[primary_issue['Any IT/IS Risk Applicable']]
 
-print(f"Entities with Primary apps: {len(summary_df[summary_df['Total Primary Apps'] > 0])}")
-print(f"Entities with Primary apps NOT Key: {len(primary_issue_entities)} ({len(primary_issue_entities)/len(summary_df)*100:.1f}%)")
-print(f"Total Primary apps NOT tagged as Key: {total_primary_not_key}")
-print()
-
-if len(primary_issue_entities) > 0:
-    # Check impact on risk
-    primary_no_risk = summary_df[summary_df['Primary Not Key + No Risk']]
-    primary_have_risk = primary_issue_entities[primary_issue_entities['Any IT/IS Risk Applicable']]
-    
-    print(f"📊 Impact Analysis:")
-    print(f"   {len(primary_no_risk)} have Primary not Key + NO IT/IS risk")
-    print(f"   └─ Confirmed understated risk")
+if len(primary_issue) > 0:
+    print(f"⚠️  HIGH PRIORITY ISSUE")
+    print(f"   Entities with Primary apps: {len(summary_df[summary_df['Total Primary Apps'] > 0])}")
+    print(f"   Entities with Primary NOT Key: {len(primary_issue)} ({len(primary_issue)/len(summary_df[summary_df['Total Primary Apps'] > 0])*100:.1f}% of entities with Primary)")
+    print(f"   Total Primary apps NOT Key: {int(total_primary_not_key)}")
     print(f"   ")
-    print(f"   {len(primary_have_risk)} have Primary not Key + IT/IS risk from other apps")
-    print(f"   └─ Risk MIGHT be understated (need ARA data to confirm)")
+    print(f"   With NO IT/IS risk: {len(primary_no_risk)} (confirmed understated)")
+    print(f"   With IT/IS risk: {len(primary_have_risk)} (potentially understated)")
     print(f"   ")
-    print(f"   Avg Primary apps not Key per entity: {primary_issue_entities['# Primary Apps Not Key'].mean():.1f}")
-    
-    # Distribution
-    print(f"\n   Distribution:")
-    print(f"   1-2 Primary apps not Key: {len(primary_issue_entities[primary_issue_entities['# Primary Apps Not Key'] <= 2])}")
-    print(f"   3-5 Primary apps not Key: {len(primary_issue_entities[(primary_issue_entities['# Primary Apps Not Key'] > 2) & (primary_issue_entities['# Primary Apps Not Key'] <= 5)])}")
-    print(f"   6+ Primary apps not Key: {len(primary_issue_entities[primary_issue_entities['# Primary Apps Not Key'] > 5])}")
+    print(f"   Distribution:")
+    print(f"   1-2 apps not Key: {len(primary_issue[primary_issue['# Primary Apps Not Key'] <= 2])}")
+    print(f"   3-5 apps not Key: {len(primary_issue[(primary_issue['# Primary Apps Not Key'] > 2) & (primary_issue['# Primary Apps Not Key'] <= 5)])}")
+    print(f"   6+ apps not Key: {len(primary_issue[primary_issue['# Primary Apps Not Key'] > 5])}")
+else:
+    print(f"✓ No issues with Primary app tagging")
 
 print()
 
 # =============================================================================
-# SECONDARY APPS ANALYSIS
-# =============================================================================
 
 print("="*70)
-print("SECONDARY APPLICATIONS NOT TAGGED AS KEY")
+print("OBSERVATION 3: SECONDARY APPS NOT TAGGED AS KEY")
 print("="*70)
 print()
 
-secondary_issue_entities = summary_df[summary_df['HIGH: Secondary Not Key']]
+secondary_issue = summary_df[summary_df['HIGH: Secondary Not Key']]
 total_secondary_not_key = summary_df['# Secondary Apps Not Key'].sum()
+secondary_no_risk = summary_df[summary_df['Secondary Not Key + No Risk']]
+secondary_have_risk = secondary_issue[secondary_issue['Any IT/IS Risk Applicable']]
 
-print(f"Entities with Secondary apps: {len(summary_df[summary_df['Total Secondary Apps'] > 0])}")
-print(f"Entities with Secondary apps NOT Key: {len(secondary_issue_entities)} ({len(secondary_issue_entities)/len(summary_df)*100:.1f}%)")
-print(f"Total Secondary apps NOT tagged as Key: {total_secondary_not_key}")
-print()
-
-if len(secondary_issue_entities) > 0:
-    # Check impact on risk
-    secondary_no_risk = summary_df[summary_df['Secondary Not Key + No Risk']]
-    secondary_have_risk = secondary_issue_entities[secondary_issue_entities['Any IT/IS Risk Applicable']]
-    
-    print(f"📊 Impact Analysis:")
-    print(f"   {len(secondary_no_risk)} have Secondary not Key + NO IT/IS risk")
-    print(f"   └─ Confirmed understated risk")
+if len(secondary_issue) > 0:
+    print(f"⚠️  HIGH PRIORITY ISSUE - METHODOLOGY VIOLATION")
+    print(f"   Entities with Secondary apps: {len(summary_df[summary_df['Total Secondary Apps'] > 0])}")
+    print(f"   Entities with Secondary NOT Key: {len(secondary_issue)} ({len(secondary_issue)/len(summary_df[summary_df['Total Secondary Apps'] > 0])*100:.1f}% of entities with Secondary)")
+    print(f"   Total Secondary apps NOT Key: {int(total_secondary_not_key)}")
     print(f"   ")
-    print(f"   {len(secondary_have_risk)} have Secondary not Key + IT/IS risk from other apps")
-    print(f"   └─ Risk MIGHT be understated (need ARA data to confirm)")
+    print(f"   With NO IT/IS risk: {len(secondary_no_risk)} (confirmed understated)")
+    print(f"   With IT/IS risk: {len(secondary_have_risk)} (potentially understated)")
+else:
+    print(f"✓ No issues with Secondary app tagging")
+
+print()
+
+# =============================================================================
+
+print("="*70)
+print("OBSERVATION 4: AUTOMATION FAILURES")
+print("="*70)
+print()
+
+primary_auto_fail = summary_df[summary_df['Primary Key Auto Failure']]
+secondary_auto_fail = summary_df[summary_df['Secondary Key Auto Failure']]
+all_auto_fail = summary_df[summary_df['Primary Key Auto Failure'] | summary_df['Secondary Key Auto Failure']]
+
+if len(all_auto_fail) > 0:
+    print(f"⚠️  AUTOMATION FAILURES DETECTED")
+    print(f"   Primary Key apps + no risk: {len(primary_auto_fail)}")
+    if len(primary_auto_fail) > 0:
+        print(f"   └─ Total Primary Key apps affected: {int(primary_auto_fail['Primary Key Apps'].sum())}")
+    print(f"   Secondary Key apps + no risk: {len(secondary_auto_fail)}")
+    if len(secondary_auto_fail) > 0:
+        print(f"   └─ Total Secondary Key apps affected: {int(secondary_auto_fail['Secondary Key Apps'].sum())}")
     print(f"   ")
-    print(f"   Avg Secondary apps not Key per entity: {secondary_issue_entities['# Secondary Apps Not Key'].mean():.1f}")
+    print(f"   Total entities with automation failures: {len(all_auto_fail)}")
+else:
+    print(f"✓ No automation failures detected")
 
 print()
 
 # =============================================================================
-# COMBINED ISSUES ANALYSIS
+# EXPORT OBSERVATION 1: GHOST APPS
 # =============================================================================
 
 print("="*70)
-print("COMBINED ISSUES")
-print("="*70)
-print()
-
-any_issue = summary_df[summary_df['ANY ISSUE']]
-print(f"Total entities with ANY mapping/tagging issue: {len(any_issue)} ({len(any_issue)/len(summary_df)*100:.1f}%)")
-print()
-
-# Multiple issues
-ghost_and_primary = summary_df[(summary_df['CRITICAL: Ghost Apps']) & (summary_df['HIGH: Primary Not Key'])]
-ghost_and_secondary = summary_df[(summary_df['CRITICAL: Ghost Apps']) & (summary_df['HIGH: Secondary Not Key'])]
-primary_and_secondary = summary_df[(summary_df['HIGH: Primary Not Key']) & (summary_df['HIGH: Secondary Not Key'])]
-all_three = summary_df[(summary_df['CRITICAL: Ghost Apps']) & (summary_df['HIGH: Primary Not Key']) & (summary_df['HIGH: Secondary Not Key'])]
-
-print(f"Entities with multiple issues:")
-print(f"   Ghost + Primary not Key: {len(ghost_and_primary)}")
-print(f"   Ghost + Secondary not Key: {len(ghost_and_secondary)}")
-print(f"   Primary + Secondary not Key: {len(primary_and_secondary)}")
-print(f"   All three issues: {len(all_three)}")
-
-print()
-
-# =============================================================================
-# EXPORT RESULTS
-# =============================================================================
-
-print("="*70)
-print("EXPORTING RESULTS")
+print("EXPORTING OBSERVATION FILES")
 print("="*70)
 
-# Export 1: Full analysis
-summary_df_export = summary_df.copy()
-# Reorder columns for clarity
-cols_order = [
-    'Audit Entity ID',
-    'CRITICAL: Ghost Apps',
-    'HIGH: Primary Not Key',
-    'HIGH: Secondary Not Key',
-    '# Ghost Apps (Key but Not Mapped)',
-    '# Primary Apps Not Key',
-    '# Secondary Apps Not Key',
-    'Total Primary Apps',
-    'Total Secondary Apps',
-    'Primary Key Apps',
-    'Secondary Key Apps',
-    'Total Key Apps',
-    'IT Risk',
-    'IS Risk',
-    'Any IT/IS Risk Applicable'
-]
-# Add remaining columns
-remaining_cols = [col for col in summary_df.columns if col not in cols_order]
-summary_df_export = summary_df_export[cols_order + remaining_cols]
-
-summary_df_export.to_excel(OUTPUT_FULL_ANALYSIS, index=False)
-print(f"✓ {OUTPUT_FULL_ANALYSIS}")
-
-# Export 2: Ghost Apps (CRITICAL)
 if len(ghost_entities) > 0:
-    ghost_export = ghost_entities.sort_values('# Ghost Apps (Key but Not Mapped)', ascending=False)
-    ghost_export.to_excel(OUTPUT_CRITICAL_ISSUES, index=False)
-    print(f"✓ {OUTPUT_CRITICAL_ISSUES}")
+    with pd.ExcelWriter(OUTPUT_OBSERVATION_1, engine='openpyxl') as writer:
+        # Tab 1: Summary
+        obs1_summary = pd.DataFrame([
+            {'Metric': 'OBSERVATION 1: GHOST APPLICATIONS', 'Value': ''},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'Definition', 'Value': 'Apps tagged as Key in KPAs but NOT mapped to entity'},
+            {'Metric': 'Severity', 'Value': 'CRITICAL'},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'Entities affected', 'Value': len(ghost_entities)},
+            {'Metric': '% of total', 'Value': f"{len(ghost_entities)/len(summary_df)*100:.1f}%"},
+            {'Metric': 'Total ghost apps', 'Value': int(total_ghost_apps)},
+            {'Metric': 'Avg per entity', 'Value': f"{total_ghost_apps/len(ghost_entities):.1f}"},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'With NO IT/IS risk', 'Value': len(ghost_no_risk)},
+            {'Metric': 'With IT/IS risk (using wrong apps)', 'Value': len(ghost_entities) - len(ghost_no_risk)},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'Impact', 'Value': 'Risk ratings are WRONG (using wrong application data)'},
+        ])
+        obs1_summary.to_excel(writer, sheet_name='Summary', index=False)
+        
+        # Tab 2: All entities with ghost apps
+        ghost_export = ghost_entities.sort_values('# Ghost Apps (Key but Not Mapped)', ascending=False)
+        ghost_export.to_excel(writer, sheet_name='All Ghost Apps', index=False)
+        
+        # Tab 3: Top 10 by ghost app count
+        top_ghost = ghost_export.head(10)
+        top_ghost.to_excel(writer, sheet_name='Top 10', index=False)
+        
+        # Tab 4: Distribution by team (if available)
+        if RISKS_CORE_TEAM_ACTUAL:
+            team_dist = ghost_entities.groupby('Core Audit Team').agg({
+                'Audit Entity ID': 'count',
+                '# Ghost Apps (Key but Not Mapped)': 'sum'
+            }).reset_index()
+            team_dist.columns = ['Core Audit Team', '# Entities', 'Total Ghost Apps']
+            team_dist = team_dist.sort_values('# Entities', ascending=False)
+            team_dist.to_excel(writer, sheet_name='By Team', index=False)
+        
+    print(f"✓ {OUTPUT_OBSERVATION_1}")
 
-# Export 3: Primary Apps Not Key
-if len(primary_issue_entities) > 0:
-    primary_export = primary_issue_entities.sort_values('# Primary Apps Not Key', ascending=False)
-    primary_export.to_excel(OUTPUT_PRIMARY_ANALYSIS, index=False)
-    print(f"✓ {OUTPUT_PRIMARY_ANALYSIS}")
+# =============================================================================
+# EXPORT OBSERVATION 2: PRIMARY APPS NOT KEY
+# =============================================================================
 
-# Export 4: Secondary Apps Not Key
-if len(secondary_issue_entities) > 0:
-    secondary_export = secondary_issue_entities.sort_values('# Secondary Apps Not Key', ascending=False)
-    secondary_export.to_excel(OUTPUT_SECONDARY_ANALYSIS, index=False)
-    print(f"✓ {OUTPUT_SECONDARY_ANALYSIS}")
+if len(primary_issue) > 0:
+    with pd.ExcelWriter(OUTPUT_OBSERVATION_2, engine='openpyxl') as writer:
+        # Tab 1: Summary
+        obs2_summary = pd.DataFrame([
+            {'Metric': 'OBSERVATION 2: PRIMARY APPS NOT TAGGED AS KEY', 'Value': ''},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'Definition', 'Value': 'Apps mapped as Primary but NOT tagged as Key in any KPA'},
+            {'Metric': 'Severity', 'Value': 'HIGH'},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'Entities with Primary apps', 'Value': len(summary_df[summary_df['Total Primary Apps'] > 0])},
+            {'Metric': 'Entities with Primary NOT Key', 'Value': len(primary_issue)},
+            {'Metric': '% non-compliance', 'Value': f"{len(primary_issue)/len(summary_df[summary_df['Total Primary Apps'] > 0])*100:.1f}%"},
+            {'Metric': 'Total Primary apps NOT Key', 'Value': int(total_primary_not_key)},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'With NO IT/IS risk', 'Value': len(primary_no_risk)},
+            {'Metric': 'With IT/IS risk', 'Value': len(primary_have_risk)},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'Distribution:', 'Value': ''},
+            {'Metric': '1-2 apps not Key', 'Value': len(primary_issue[primary_issue['# Primary Apps Not Key'] <= 2])},
+            {'Metric': '3-5 apps not Key', 'Value': len(primary_issue[(primary_issue['# Primary Apps Not Key'] > 2) & (primary_issue['# Primary Apps Not Key'] <= 5)])},
+            {'Metric': '6+ apps not Key', 'Value': len(primary_issue[primary_issue['# Primary Apps Not Key'] > 5])},
+        ])
+        obs2_summary.to_excel(writer, sheet_name='Summary', index=False)
+        
+        # Tab 2: All entities
+        primary_export = primary_issue.sort_values('# Primary Apps Not Key', ascending=False)
+        primary_export.to_excel(writer, sheet_name='All Primary Not Key', index=False)
+        
+        # Tab 3: High count (6+)
+        high_count = primary_issue[primary_issue['# Primary Apps Not Key'] > 5].sort_values('# Primary Apps Not Key', ascending=False)
+        high_count.to_excel(writer, sheet_name='High Count (6+)', index=False)
+        
+        # Tab 4: No Risk (confirmed understated)
+        primary_no_risk.to_excel(writer, sheet_name='No Risk (Confirmed)', index=False)
+        
+        # Tab 5: Has Risk (potentially understated)
+        primary_have_risk_sorted = primary_have_risk.sort_values('# Primary Apps Not Key', ascending=False).head(20)
+        primary_have_risk_sorted.to_excel(writer, sheet_name='Has Risk (Potential)', index=False)
+        
+        # Tab 6: By Team (if available)
+        if RISKS_CORE_TEAM_ACTUAL:
+            team_dist = primary_issue.groupby('Core Audit Team').agg({
+                'Audit Entity ID': 'count',
+                '# Primary Apps Not Key': 'sum'
+            }).reset_index()
+            team_dist.columns = ['Core Audit Team', '# Entities', 'Total Primary Apps Not Key']
+            team_dist = team_dist.sort_values('# Entities', ascending=False)
+            team_dist.to_excel(writer, sheet_name='By Team', index=False)
+    
+    print(f"✓ {OUTPUT_OBSERVATION_2}")
 
-# Export 5: Executive Summary
-exec_summary = pd.DataFrame([
-    {'Metric': 'Total Entities Analyzed', 'Value': len(summary_df), 'Severity': ''},
-    {'Metric': '', 'Value': '', 'Severity': ''},
-    {'Metric': 'CRITICAL: Ghost Applications', 'Value': '', 'Severity': 'CRITICAL'},
-    {'Metric': '└─ Entities with ghost apps', 'Value': len(ghost_entities), 'Severity': ''},
-    {'Metric': '└─ Total ghost apps', 'Value': int(total_ghost_apps), 'Severity': ''},
-    {'Metric': '└─ Impact', 'Value': 'Risk ratings using WRONG apps', 'Severity': ''},
-    {'Metric': '', 'Value': '', 'Severity': ''},
-    {'Metric': 'HIGH: Primary Apps Not Tagged as Key', 'Value': '', 'Severity': 'HIGH'},
-    {'Metric': '└─ Entities affected', 'Value': len(primary_issue_entities), 'Severity': ''},
-    {'Metric': '└─ Total Primary apps not Key', 'Value': int(total_primary_not_key), 'Severity': ''},
-    {'Metric': '└─ With NO IT/IS risk', 'Value': len(primary_no_risk) if len(primary_issue_entities) > 0 else 0, 'Severity': ''},
-    {'Metric': '└─ With IT/IS risk (unknown if correct)', 'Value': len(primary_have_risk) if len(primary_issue_entities) > 0 else 0, 'Severity': ''},
-    {'Metric': '', 'Value': '', 'Severity': ''},
-    {'Metric': 'HIGH: Secondary Apps Not Tagged as Key', 'Value': '', 'Severity': 'HIGH'},
-    {'Metric': '└─ Entities affected', 'Value': len(secondary_issue_entities), 'Severity': ''},
-    {'Metric': '└─ Total Secondary apps not Key', 'Value': int(total_secondary_not_key), 'Severity': ''},
-    {'Metric': '└─ With NO IT/IS risk', 'Value': len(secondary_no_risk) if len(secondary_issue_entities) > 0 else 0, 'Severity': ''},
-    {'Metric': '└─ With IT/IS risk (unknown if correct)', 'Value': len(secondary_have_risk) if len(secondary_issue_entities) > 0 else 0, 'Severity': ''},
-    {'Metric': '', 'Value': '', 'Severity': ''},
-    {'Metric': 'TOTAL ENTITIES WITH ANY ISSUE', 'Value': len(any_issue), 'Severity': ''},
-    {'Metric': '└─ % of total', 'Value': f"{len(any_issue)/len(summary_df)*100:.1f}%", 'Severity': ''},
-])
-exec_summary.to_excel(OUTPUT_EXECUTIVE_SUMMARY, index=False)
+# =============================================================================
+# EXPORT OBSERVATION 3: SECONDARY APPS NOT KEY
+# =============================================================================
+
+if len(secondary_issue) > 0:
+    with pd.ExcelWriter(OUTPUT_OBSERVATION_3, engine='openpyxl') as writer:
+        # Tab 1: Summary
+        obs3_summary = pd.DataFrame([
+            {'Metric': 'OBSERVATION 3: SECONDARY APPS NOT TAGGED AS KEY', 'Value': ''},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'Definition', 'Value': 'Apps mapped as Secondary but NOT tagged as Key in any KPA'},
+            {'Metric': 'Rule', 'Value': 'Secondary apps should be Key in at least one KPA'},
+            {'Metric': 'Severity', 'Value': 'HIGH - Methodology Violation'},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'Entities with Secondary apps', 'Value': len(summary_df[summary_df['Total Secondary Apps'] > 0])},
+            {'Metric': 'Entities with Secondary NOT Key', 'Value': len(secondary_issue)},
+            {'Metric': '% non-compliance', 'Value': f"{len(secondary_issue)/len(summary_df[summary_df['Total Secondary Apps'] > 0])*100:.1f}%"},
+            {'Metric': 'Total Secondary apps NOT Key', 'Value': int(total_secondary_not_key)},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'With NO IT/IS risk', 'Value': len(secondary_no_risk)},
+            {'Metric': 'With IT/IS risk', 'Value': len(secondary_have_risk)},
+        ])
+        obs3_summary.to_excel(writer, sheet_name='Summary', index=False)
+        
+        # Tab 2: All entities
+        secondary_export = secondary_issue.sort_values('# Secondary Apps Not Key', ascending=False)
+        secondary_export.to_excel(writer, sheet_name='All Secondary Not Key', index=False)
+        
+        # Tab 3: No Risk (confirmed understated)
+        secondary_no_risk.to_excel(writer, sheet_name='No Risk (Confirmed)', index=False)
+        
+        # Tab 4: Has Risk (potentially understated)
+        secondary_have_risk_sorted = secondary_have_risk.sort_values('# Secondary Apps Not Key', ascending=False).head(20)
+        secondary_have_risk_sorted.to_excel(writer, sheet_name='Has Risk (Potential)', index=False)
+        
+        # Tab 5: By Team (if available)
+        if RISKS_CORE_TEAM_ACTUAL:
+            team_dist = secondary_issue.groupby('Core Audit Team').agg({
+                'Audit Entity ID': 'count',
+                '# Secondary Apps Not Key': 'sum'
+            }).reset_index()
+            team_dist.columns = ['Core Audit Team', '# Entities', 'Total Secondary Apps Not Key']
+            team_dist = team_dist.sort_values('# Entities', ascending=False)
+            team_dist.to_excel(writer, sheet_name='By Team', index=False)
+    
+    print(f"✓ {OUTPUT_OBSERVATION_3}")
+
+# =============================================================================
+# EXPORT OBSERVATION 4: AUTOMATION FAILURES
+# =============================================================================
+
+if len(all_auto_fail) > 0:
+    with pd.ExcelWriter(OUTPUT_OBSERVATION_4, engine='openpyxl') as writer:
+        # Tab 1: Summary
+        obs4_summary = pd.DataFrame([
+            {'Metric': 'OBSERVATION 4: AUTOMATION FAILURES', 'Value': ''},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'Definition', 'Value': 'Key apps exist but IT/IS risk NOT populated'},
+            {'Metric': 'Severity', 'Value': 'HIGH'},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'Primary Key + no risk', 'Value': len(primary_auto_fail)},
+            {'Metric': 'Secondary Key + no risk', 'Value': len(secondary_auto_fail)},
+            {'Metric': 'Total entities', 'Value': len(all_auto_fail)},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'Total Primary Key apps affected', 'Value': int(primary_auto_fail['Primary Key Apps'].sum()) if len(primary_auto_fail) > 0 else 0},
+            {'Metric': 'Total Secondary Key apps affected', 'Value': int(secondary_auto_fail['Secondary Key Apps'].sum()) if len(secondary_auto_fail) > 0 else 0},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'Impact', 'Value': 'Risk should be populated but is not'},
+        ])
+        obs4_summary.to_excel(writer, sheet_name='Summary', index=False)
+        
+        # Tab 2: All automation failures
+        all_auto_fail_sorted = all_auto_fail.sort_values(['Primary Key Apps', 'Secondary Key Apps'], ascending=False)
+        all_auto_fail_sorted.to_excel(writer, sheet_name='All Automation Failures', index=False)
+        
+        # Tab 3: Primary Key failures (if any)
+        if len(primary_auto_fail) > 0:
+            primary_auto_fail.to_excel(writer, sheet_name='Primary Key Failures', index=False)
+        
+        # Tab 4: Secondary Key failures (if any)
+        if len(secondary_auto_fail) > 0:
+            secondary_auto_fail.to_excel(writer, sheet_name='Secondary Key Failures', index=False)
+    
+    print(f"✓ {OUTPUT_OBSERVATION_4}")
+
+# =============================================================================
+# EXPORT EXECUTIVE SUMMARY
+# =============================================================================
+
+with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
+    # Tab 1: Overall Summary
+    exec_summary = pd.DataFrame([
+        {'Metric': 'IT/IS RISK APPLICABILITY ANALYSIS', 'Value': '', 'Details': ''},
+        {'Metric': 'EXECUTIVE SUMMARY', 'Value': '', 'Details': ''},
+        {'Metric': '', 'Value': '', 'Details': ''},
+        {'Metric': 'Scope', 'Value': len(summary_df), 'Details': 'audit entities analyzed'},
+        {'Metric': '', 'Value': '', 'Details': ''},
+        {'Metric': 'OBSERVATION 1: Ghost Applications', 'Value': '', 'Details': 'CRITICAL'},
+        {'Metric': '└─ Entities affected', 'Value': len(ghost_entities) if len(ghost_entities) > 0 else 0, 'Details': f"{len(ghost_entities)/len(summary_df)*100:.1f}%" if len(ghost_entities) > 0 else '0%'},
+        {'Metric': '└─ Total ghost apps', 'Value': int(total_ghost_apps) if len(ghost_entities) > 0 else 0, 'Details': 'risk calculated from WRONG apps'},
+        {'Metric': '', 'Value': '', 'Details': ''},
+        {'Metric': 'OBSERVATION 2: Primary Apps Not Key', 'Value': '', 'Details': 'HIGH'},
+        {'Metric': '└─ Entities affected', 'Value': len(primary_issue) if len(primary_issue) > 0 else 0, 'Details': f"{len(primary_issue)/len(summary_df)*100:.1f}%" if len(primary_issue) > 0 else '0%'},
+        {'Metric': '└─ Total Primary apps not Key', 'Value': int(total_primary_not_key) if len(primary_issue) > 0 else 0, 'Details': ''},
+        {'Metric': '└─ With NO IT/IS risk', 'Value': len(primary_no_risk) if len(primary_issue) > 0 else 0, 'Details': 'confirmed understated'},
+        {'Metric': '└─ With IT/IS risk', 'Value': len(primary_have_risk) if len(primary_issue) > 0 else 0, 'Details': 'potentially understated'},
+        {'Metric': '', 'Value': '', 'Details': ''},
+        {'Metric': 'OBSERVATION 3: Secondary Apps Not Key', 'Value': '', 'Details': 'HIGH'},
+        {'Metric': '└─ Entities affected', 'Value': len(secondary_issue) if len(secondary_issue) > 0 else 0, 'Details': f"{len(secondary_issue)/len(summary_df)*100:.1f}%" if len(secondary_issue) > 0 else '0%'},
+        {'Metric': '└─ Total Secondary apps not Key', 'Value': int(total_secondary_not_key) if len(secondary_issue) > 0 else 0, 'Details': 'methodology violation'},
+        {'Metric': '└─ With NO IT/IS risk', 'Value': len(secondary_no_risk) if len(secondary_issue) > 0 else 0, 'Details': 'confirmed understated'},
+        {'Metric': '└─ With IT/IS risk', 'Value': len(secondary_have_risk) if len(secondary_issue) > 0 else 0, 'Details': 'potentially understated'},
+        {'Metric': '', 'Value': '', 'Details': ''},
+        {'Metric': 'OBSERVATION 4: Automation Failures', 'Value': '', 'Details': 'HIGH'},
+        {'Metric': '└─ Entities affected', 'Value': len(all_auto_fail) if len(all_auto_fail) > 0 else 0, 'Details': 'Key apps but no risk'},
+        {'Metric': '', 'Value': '', 'Details': ''},
+        {'Metric': 'TOTAL ENTITIES WITH ANY ISSUE', 'Value': len(summary_df[summary_df['ANY ISSUE']]), 'Details': f"{len(summary_df[summary_df['ANY ISSUE']])/len(summary_df)*100:.1f}%"},
+        {'Metric': '', 'Value': '', 'Details': ''},
+        {'Metric': 'CONFIRMED IMPACT', 'Value': '', 'Details': ''},
+        {'Metric': '└─ Wrong risk ratings (ghost apps)', 'Value': len(ghost_entities) - len(ghost_no_risk) if len(ghost_entities) > 0 else 0, 'Details': 'entities'},
+        {'Metric': '└─ Understated risk (no IT/IS risk)', 'Value': len(primary_no_risk) + len(secondary_no_risk) + len(ghost_no_risk), 'Details': 'entities'},
+        {'Metric': 'TOTAL CONFIRMED', 'Value': len(ghost_entities) + len(primary_no_risk) + len(secondary_no_risk), 'Details': f"{(len(ghost_entities) + len(primary_no_risk) + len(secondary_no_risk))/len(summary_df)*100:.1f}%"},
+    ])
+    exec_summary.to_excel(writer, sheet_name='Executive Summary', index=False)
+    
+    # Tab 2: Observation Comparison
+    obs_comparison = pd.DataFrame([
+        {
+            'Observation': '1 - Ghost Apps',
+            'Severity': 'CRITICAL',
+            'Entities': len(ghost_entities) if len(ghost_entities) > 0 else 0,
+            '% of Total': f"{len(ghost_entities)/len(summary_df)*100:.1f}%" if len(ghost_entities) > 0 else '0%',
+            'Apps Affected': int(total_ghost_apps) if len(ghost_entities) > 0 else 0,
+            'Impact': 'Risk ratings WRONG',
+            'File': OUTPUT_OBSERVATION_1 if len(ghost_entities) > 0 else 'N/A'
+        },
+        {
+            'Observation': '2 - Primary Not Key',
+            'Severity': 'HIGH',
+            'Entities': len(primary_issue) if len(primary_issue) > 0 else 0,
+            '% of Total': f"{len(primary_issue)/len(summary_df)*100:.1f}%" if len(primary_issue) > 0 else '0%',
+            'Apps Affected': int(total_primary_not_key) if len(primary_issue) > 0 else 0,
+            'Impact': f"{len(primary_no_risk)} confirmed, {len(primary_have_risk)} potential" if len(primary_issue) > 0 else 'None',
+            'File': OUTPUT_OBSERVATION_2 if len(primary_issue) > 0 else 'N/A'
+        },
+        {
+            'Observation': '3 - Secondary Not Key',
+            'Severity': 'HIGH',
+            'Entities': len(secondary_issue) if len(secondary_issue) > 0 else 0,
+            '% of Total': f"{len(secondary_issue)/len(summary_df)*100:.1f}%" if len(secondary_issue) > 0 else '0%',
+            'Apps Affected': int(total_secondary_not_key) if len(secondary_issue) > 0 else 0,
+            'Impact': f"{len(secondary_no_risk)} confirmed, {len(secondary_have_risk)} potential" if len(secondary_issue) > 0 else 'None',
+            'File': OUTPUT_OBSERVATION_3 if len(secondary_issue) > 0 else 'N/A'
+        },
+        {
+            'Observation': '4 - Automation Failures',
+            'Severity': 'HIGH',
+            'Entities': len(all_auto_fail) if len(all_auto_fail) > 0 else 0,
+            '% of Total': f"{len(all_auto_fail)/len(summary_df)*100:.1f}%" if len(all_auto_fail) > 0 else '0%',
+            'Apps Affected': int(primary_auto_fail['Primary Key Apps'].sum() + secondary_auto_fail['Secondary Key Apps'].sum()) if len(all_auto_fail) > 0 else 0,
+            'Impact': 'Risk should exist but missing',
+            'File': OUTPUT_OBSERVATION_4 if len(all_auto_fail) > 0 else 'N/A'
+        }
+    ])
+    obs_comparison.to_excel(writer, sheet_name='Observation Comparison', index=False)
+    
+    # Tab 3: Team Analysis (if available)
+    if RISKS_CORE_TEAM_ACTUAL:
+        # Count issues by team across all observations
+        team_summary = summary_df.groupby('Core Audit Team').agg({
+            'Audit Entity ID': 'count',
+            'CRITICAL: Ghost Apps': 'sum',
+            'HIGH: Primary Not Key': 'sum',
+            'HIGH: Secondary Not Key': 'sum',
+            'Primary Key Auto Failure': 'sum',
+            'Secondary Key Auto Failure': 'sum'
+        }).reset_index()
+        
+        team_summary.columns = [
+            'Core Audit Team',
+            'Total Entities',
+            'Ghost Apps',
+            'Primary Not Key',
+            'Secondary Not Key',
+            'Primary Auto Fail',
+            'Secondary Auto Fail'
+        ]
+        
+        # Add total issues column
+        team_summary['Total Issues'] = (
+            team_summary['Ghost Apps'] +
+            team_summary['Primary Not Key'] +
+            team_summary['Secondary Not Key'] +
+            team_summary['Primary Auto Fail'] +
+            team_summary['Secondary Auto Fail']
+        )
+        
+        # Calculate percentages
+        team_summary['% With Issues'] = round((team_summary['Total Issues'] / team_summary['Total Entities']) * 100, 1)
+        
+        # Sort by total issues
+        team_summary = team_summary.sort_values('Total Issues', ascending=False)
+        
+        team_summary.to_excel(writer, sheet_name='By Team', index=False)
+
 print(f"✓ {OUTPUT_EXECUTIVE_SUMMARY}")
+
+# =============================================================================
+# EXPORT FULL ANALYSIS (SOURCE DATA)
+# =============================================================================
+
+summary_df.to_excel(OUTPUT_FULL_ANALYSIS, index=False)
+print(f"✓ {OUTPUT_FULL_ANALYSIS}")
 
 # =============================================================================
 # FINAL SUMMARY
@@ -508,166 +752,84 @@ print(f"✓ {OUTPUT_EXECUTIVE_SUMMARY}")
 print("\n" + "="*70)
 print("ANALYSIS COMPLETE")
 print("="*70)
-print(f"\n📊 Summary of Issues:")
-print(f"   CRITICAL - Ghost Apps: {len(ghost_entities)} entities, {int(total_ghost_apps)} apps")
-print(f"   HIGH - Primary Not Key: {len(primary_issue_entities)} entities, {int(total_primary_not_key)} apps")
-print(f"   HIGH - Secondary Not Key: {len(secondary_issue_entities)} entities, {int(total_secondary_not_key)} apps")
-print(f"   ")
-print(f"   Total entities with issues: {len(any_issue)} ({len(any_issue)/len(summary_df)*100:.1f}%)")
+print(f"\n📊 Files Created:")
+print(f"   {OUTPUT_EXECUTIVE_SUMMARY}")
+if len(ghost_entities) > 0:
+    print(f"   {OUTPUT_OBSERVATION_1}")
+if len(primary_issue) > 0:
+    print(f"   {OUTPUT_OBSERVATION_2}")
+if len(secondary_issue) > 0:
+    print(f"   {OUTPUT_OBSERVATION_3}")
+if len(all_auto_fail) > 0:
+    print(f"   {OUTPUT_OBSERVATION_4}")
+print(f"   {OUTPUT_FULL_ANALYSIS}")
+
+print(f"\n📁 Each observation file contains multiple tabs:")
+print(f"   - Summary (metrics and impact)")
+print(f"   - All data (complete list)")
+print(f"   - Filtered views (samples, high priority)")
+if RISKS_CORE_TEAM_ACTUAL:
+    print(f"   - By Team (distribution analysis)")
+
 print("\n" + "="*70)
 ```
 
 ---
 
-## **What This Script Now Does**
+## **What This Updated Script Does**
 
-### **1. Ghost App Detection (NEW - CRITICAL)**
-- Identifies apps tagged as Key in KPAs but NOT mapped to the entity
-- These cause WRONG risk calculations
-- Highest priority issue
+### **1. Organized Output Files by Observation**
 
-### **2. Primary Apps Not Key Analysis (NEW)**
-- Shows which Primary apps aren't tagged as Key
-- Counts and percentages
-- Impact on risk (none vs. might be understated)
+Each observation gets its own file with multiple tabs:
 
-### **3. Secondary Apps Not Key Analysis (ENHANCED)**
-- Your original finding
-- Now shows impact more clearly
-- Distinguishes confirmed vs. potential understatement
+**Observation1_GhostApps.xlsx:**
+- Summary tab
+- All Ghost Apps tab
+- Top 10 tab
+- By Team tab (if team data available)
 
-### **4. Combined Analysis (NEW)**
-- Shows entities with multiple issues
-- Helps prioritize worst cases
+**Observation2_PrimaryNotKey.xlsx:**
+- Summary tab
+- All Primary Not Key tab
+- High Count (6+) tab
+- No Risk (Confirmed) tab
+- Has Risk (Potential) tab
+- By Team tab
 
----
+**Observation3_SecondaryNotKey.xlsx:**
+- Summary tab
+- All Secondary Not Key tab
+- No Risk (Confirmed) tab
+- Has Risk (Potential) tab
+- By Team tab
 
-## **Output Files**
+**Observation4_AutomationFailures.xlsx:**
+- Summary tab
+- All Automation Failures tab
+- Primary Key Failures tab (if any)
+- Secondary Key Failures tab (if any)
 
-### **File 1: `full_analysis_with_flags.xlsx`**
-Complete dataset with all metrics and flags
+### **2. Executive Summary File**
 
-**Key columns:**
-- `CRITICAL: Ghost Apps` - TRUE/FALSE flag
-- `HIGH: Primary Not Key` - TRUE/FALSE flag
-- `HIGH: Secondary Not Key` - TRUE/FALSE flag
-- `# Ghost Apps (Key but Not Mapped)` - count
-- `Ghost App IDs` - comma-separated list
-- `# Primary Apps Not Key` - count
-- `Primary Not Key IDs` - comma-separated list
-- `# Secondary Apps Not Key` - count
-- `Secondary Not Key IDs` - comma-separated list
+**00_ExecutiveSummary.xlsx:**
+- Executive Summary tab (overall metrics)
+- Observation Comparison tab (side-by-side)
+- By Team tab (team analysis across all observations)
 
-### **File 2: `critical_issues_ghost_apps.xlsx`**
-Only entities with ghost apps - INVESTIGATE THESE FIRST
+### **3. Team Analysis**
 
-### **File 3: `primary_apps_not_key_analysis.xlsx`**
-All entities with Primary apps not tagged as Key
+If Core Audit Team and Audit Leader columns exist, the script:
+- Includes them in all data exports
+- Creates "By Team" tabs showing distribution of issues
+- Creates team summary in Executive Summary showing which teams have most issues
 
-### **File 4: `secondary_apps_not_key_analysis.xlsx`**
-All entities with Secondary apps not tagged as Key
+### **4. Easy Navigation**
 
-### **File 5: `executive_summary.xlsx`**
-One-page summary with counts and severity
-
----
-
-## **After Running the Script**
-
-### **Step 1: Check Console Output**
-
-Look for:
+**File names are numbered and descriptive:**
 ```
-⚠️ CRITICAL DATA INTEGRITY ISSUE DETECTED
-   XX entities have ghost applications
-   XXX total ghost apps affecting risk calculations
-```
-
-**Write down:**
-- # entities with ghost apps: _____
-- # total ghost apps: _____
-
-### **Step 2: Review Executive Summary**
-
-Open `executive_summary.xlsx`
-
-**Write down the key numbers:**
-```
-Ghost Apps:
-- Entities: _____
-- Total apps: _____
-
-Primary Not Key:
-- Entities: _____
-- Total apps: _____
-- With NO risk: _____
-- With risk (unknown if correct): _____
-
-Secondary Not Key:
-- Entities: _____
-- Total apps: _____
-- With NO risk: _____
-- With risk (unknown if correct): _____
-```
-
-### **Step 3: Investigate Ghost Apps (PRIORITY 1)**
-
-Open `critical_issues_ghost_apps.xlsx`
-
-**Sort by `# Ghost Apps (Key but Not Mapped)` (descending)**
-
-**Pick top 5-10 for investigation**
-
-For each:
-1. What are the ghost app IDs?
-2. Where do those apps actually belong? (check other entities)
-3. What apps SHOULD be in the KPA instead?
-4. Is the risk rating wrong?
-
-### **Step 4: Investigate Primary Apps Not Key**
-
-Open `primary_apps_not_key_analysis.xlsx`
-
-**Filter/Sort options:**
-
-**Option A: Entities with NO risk (confirmed issue)**
-```
-Filter: Any IT/IS Risk Applicable = FALSE
-Sort by: # Primary Apps Not Key (descending)
-```
-
-**Option B: Entities with highest counts**
-```
-Sort by: # Primary Apps Not Key (descending)
-Take top 10
-```
-
-**For sampling:**
-- Pick 5 with NO risk
-- Pick 5 with risk (to see if risk is understated)
-
-### **Step 5: Investigate Secondary Apps Not Key**
-
-Open `secondary_apps_not_key_analysis.xlsx`
-
-Same approach as Primary apps
-
-### **Step 6: Look for Patterns in Full Analysis**
-
-Open `full_analysis_with_flags.xlsx`
-
-**Create Pivot Table:**
-
-**Rows:** All three flag columns
-- CRITICAL: Ghost Apps
-- HIGH: Primary Not Key  
-- HIGH: Secondary Not Key
-
-**Values:** Count of Audit Entity ID
-
-**This shows you the distribution:**
-```
-Ghost=Yes, Primary=Yes, Secondary=Yes: X entities (worst)
-Ghost=Yes, Primary=No, Secondary=Yes: X entities
-Ghost=No, Primary=Yes, Secondary=Yes: X entities
-... etc
+00_ExecutiveSummary.xlsx
+Observation1_GhostApps.xlsx
+Observation2_PrimaryNotKey.xlsx
+Observation3_SecondaryNotKey.xlsx
+Observation4_AutomationFailures.xlsx
+SourceData_FullAnalysis.xlsx
