@@ -20,10 +20,6 @@ RISKS_IS_COL = "Information Security Inherent Risk"
 RISKS_PRIMARY_APPS_COL = "Primary IT applications (mapped)"
 RISKS_SECONDARY_APPS_COL = "Secondary IT applications (mapped)"
 
-# NEW: Override indicator column (if it exists)
-RISKS_IT_OVERRIDE_COL = "IT Risk Override"  # Set to None if doesn't exist
-RISKS_IS_OVERRIDE_COL = "IS Risk Override"  # Set to None if doesn't exist
-
 # Column names in KPA file (case-insensitive matching will be applied)
 KPA_AE_ID_COL = "Audit Entity"
 KPA_ID_COL = "KPA ID"
@@ -31,8 +27,9 @@ KPA_KEY_APPS_COL = "KEY PRIMARY & SECONDARY IT applictions"
 
 # Output file names
 OUTPUT_FULL_ANALYSIS = "full_analysis_with_flags.xlsx"
-OUTPUT_METHODOLOGY_VIOLATIONS = "methodology_violations_report.xlsx"
-OUTPUT_PATTERN_DISCOVERY = "pattern_discovery_report.xlsx"
+OUTPUT_CRITICAL_ISSUES = "critical_issues_ghost_apps.xlsx"
+OUTPUT_PRIMARY_ANALYSIS = "primary_apps_not_key_analysis.xlsx"
+OUTPUT_SECONDARY_ANALYSIS = "secondary_apps_not_key_analysis.xlsx"
 OUTPUT_EXECUTIVE_SUMMARY = "executive_summary.xlsx"
 
 # Risk values that indicate the risk IS applicable
@@ -81,10 +78,6 @@ RISKS_IS_ACTUAL = find_column(risks_df, RISKS_IS_COL)
 RISKS_PRIMARY_APPS_ACTUAL = find_column(risks_df, RISKS_PRIMARY_APPS_COL)
 RISKS_SECONDARY_APPS_ACTUAL = find_column(risks_df, RISKS_SECONDARY_APPS_COL)
 
-# Optional override columns
-RISKS_IT_OVERRIDE_ACTUAL = find_column(risks_df, RISKS_IT_OVERRIDE_COL, optional=True)
-RISKS_IS_OVERRIDE_ACTUAL = find_column(risks_df, RISKS_IS_OVERRIDE_COL, optional=True)
-
 KPA_AE_ID_ACTUAL = find_column(kpa_df, KPA_AE_ID_COL)
 KPA_ID_ACTUAL = find_column(kpa_df, KPA_ID_COL)
 KPA_KEY_APPS_ACTUAL = find_column(kpa_df, KPA_KEY_APPS_COL)
@@ -96,10 +89,6 @@ print(f"✓ Risks file - AE ID: '{RISKS_AE_ID_ACTUAL}'")
 print(f"✓ Risks file - IT Risk: '{RISKS_IT_ACTUAL}'")
 print(f"✓ Risks file - IS Risk: '{RISKS_IS_ACTUAL}'")
 print(f"✓ KPA file - AE ID: '{KPA_AE_ID_ACTUAL}'")
-if RISKS_IT_OVERRIDE_ACTUAL:
-    print(f"✓ Override columns found - will analyze overrides")
-else:
-    print(f"⚠ No override columns found - cannot analyze manual overrides")
 print()
 
 # =============================================================================
@@ -132,7 +121,7 @@ ae_secondary_map = dict(zip(risks_df[RISKS_AE_ID_ACTUAL], risks_df['Secondary_Li
 
 kpa_df['Key_List'] = kpa_df[KPA_KEY_APPS_ACTUAL].apply(split_ids)
 
-# This groups by Entity ID - so we only get Key apps for THAT entity's KPAs
+# Aggregate all Key apps per AE (across all KPAs)
 kpa_key_map = (
     kpa_df.groupby(KPA_AE_ID_ACTUAL)['Key_List']
     .apply(lambda x: set([item for sublist in x for item in sublist]))
@@ -154,64 +143,86 @@ for ae_id in risks_df[RISKS_AE_ID_ACTUAL]:
     primary_apps = ae_primary_map.get(ae_id, [])
     secondary_apps = ae_secondary_map.get(ae_id, [])
     
+    # Get all mapped apps
+    all_mapped_apps = set(primary_apps + secondary_apps)
+    
     # Get Key apps for THIS entity's KPAs
     key_apps_set = kpa_key_map.get(ae_id, set())
     
-    # Find which apps are Key
-    primary_key = [aid for aid in primary_apps if aid and aid in key_apps_set]
-    secondary_key = [aid for aid in secondary_apps if aid and aid in key_apps_set]
+    # ========== NEW: GHOST APP DETECTION ==========
+    # Apps tagged as Key in KPAs but NOT mapped to this entity
+    ghost_apps = [aid for aid in key_apps_set if aid and aid not in all_mapped_apps]
     
-    # Find which secondary apps are NOT Key
-    secondary_missing_key = [aid for aid in secondary_apps if aid and aid not in key_apps_set]
+    # ========== PRIMARY APP ANALYSIS ==========
+    # Find which Primary apps are Key
+    primary_key = [aid for aid in primary_apps if aid and aid in key_apps_set]
+    # Find which Primary apps are NOT Key
+    primary_not_key = [aid for aid in primary_apps if aid and aid not in key_apps_set]
+    
+    # ========== SECONDARY APP ANALYSIS ==========
+    # Find which Secondary apps are Key
+    secondary_key = [aid for aid in secondary_apps if aid and aid in key_apps_set]
+    # Find which Secondary apps are NOT Key
+    secondary_not_key = [aid for aid in secondary_apps if aid and aid not in key_apps_set]
     
     # Calculate metrics
     total_primary = len([aid for aid in primary_apps if aid])
     total_secondary = len([aid for aid in secondary_apps if aid])
     total_apps = total_primary + total_secondary
+    total_mapped_apps = len(all_mapped_apps)
+    
     total_primary_key = len(primary_key)
     total_secondary_key = len(secondary_key)
     total_key_apps = len(key_apps_set)
-    num_secondary_missing_key = len(secondary_missing_key)
-    pct_secondary_missing_key = round((num_secondary_missing_key / total_secondary) * 100, 1) if total_secondary else 0
     
-    # Pull risk and override info
+    num_ghost_apps = len(ghost_apps)
+    num_primary_not_key = len(primary_not_key)
+    num_secondary_not_key = len(secondary_not_key)
+    
+    pct_primary_not_key = round((num_primary_not_key / total_primary) * 100, 1) if total_primary else 0
+    pct_secondary_not_key = round((num_secondary_not_key / total_secondary) * 100, 1) if total_secondary else 0
+    
+    # Pull risk applicability
     risks_row = risks_df[risks_df[RISKS_AE_ID_ACTUAL] == ae_id]
     
     if len(risks_row) > 0:
         it_risk = risks_row[RISKS_IT_ACTUAL].values[0]
         is_risk = risks_row[RISKS_IS_ACTUAL].values[0]
-        
-        # Check for overrides if columns exist
-        if RISKS_IT_OVERRIDE_ACTUAL:
-            it_override = risks_row[RISKS_IT_OVERRIDE_ACTUAL].values[0]
-        else:
-            it_override = None
-            
-        if RISKS_IS_OVERRIDE_ACTUAL:
-            is_override = risks_row[RISKS_IS_OVERRIDE_ACTUAL].values[0]
-        else:
-            is_override = None
     else:
         it_risk = 'N/A'
         is_risk = 'N/A'
-        it_override = None
-        is_override = None
     
     # Build output row
     rows.append({
         'Audit Entity ID': ae_id,
+        
+        # Mapping counts
         'Total Primary Apps': total_primary,
         'Total Secondary Apps': total_secondary,
-        'Total Apps': total_apps,
+        'Total Mapped Apps': total_mapped_apps,
+        
+        # Key designation counts
         'Primary Key Apps': total_primary_key,
         'Secondary Key Apps': total_secondary_key,
         'Total Key Apps': total_key_apps,
-        '# Secondary Apps Missing Key': num_secondary_missing_key,
-        '% Secondary Apps Missing Key': pct_secondary_missing_key,
+        
+        # Issues - Ghost Apps (CRITICAL)
+        '# Ghost Apps (Key but Not Mapped)': num_ghost_apps,
+        'Ghost App IDs': ','.join(ghost_apps) if ghost_apps else '',
+        
+        # Issues - Primary Apps Not Key
+        '# Primary Apps Not Key': num_primary_not_key,
+        '% Primary Apps Not Key': pct_primary_not_key,
+        'Primary Not Key IDs': ','.join(primary_not_key) if primary_not_key else '',
+        
+        # Issues - Secondary Apps Not Key
+        '# Secondary Apps Not Key': num_secondary_not_key,
+        '% Secondary Apps Not Key': pct_secondary_not_key,
+        'Secondary Not Key IDs': ','.join(secondary_not_key) if secondary_not_key else '',
+        
+        # Risk status
         'IT Risk': it_risk,
-        'IS Risk': is_risk,
-        'IT Override': it_override if it_override is not None else 'Unknown',
-        'IS Override': is_override if is_override is not None else 'Unknown'
+        'IS Risk': is_risk
     })
 
 # =============================================================================
@@ -233,176 +244,180 @@ def is_risk_applicable(risk_value):
         return False
     return str(risk_value).strip() in RISK_APPLICABLE_VALUES
 
-def is_override(override_value):
-    """Check if an override occurred"""
-    if pd.isna(override_value) or override_value == 'Unknown':
-        return False
-    # Adjust this based on what values indicate override in your data
-    # Common: 'Y', 'Yes', True, 'Override'
-    return str(override_value).strip() in ['Y', 'Yes', 'True', 'Override', '1']
-
 # Add boolean columns
 summary_df['IT Risk Applicable'] = summary_df['IT Risk'].apply(is_risk_applicable)
 summary_df['IS Risk Applicable'] = summary_df['IS Risk'].apply(is_risk_applicable)
 summary_df['Any IT/IS Risk Applicable'] = summary_df['IT Risk Applicable'] | summary_df['IS Risk Applicable']
 
-summary_df['IT Risk Overridden'] = summary_df['IT Override'].apply(is_override)
-summary_df['IS Risk Overridden'] = summary_df['IS Override'].apply(is_override)
-summary_df['Any Override'] = summary_df['IT Risk Overridden'] | summary_df['IS Risk Overridden']
-
 # =============================================================================
-# IDENTIFY METHODOLOGY VIOLATIONS
+# FLAG CRITICAL ISSUES
 # =============================================================================
 
-# VIOLATION 1: Secondary Key apps but no IT/IS risk (direct rule violation)
-summary_df['VIOLATION: Secondary Key + No Risk'] = (
-    (summary_df['Secondary Key Apps'] > 0) &
+# CRITICAL: Ghost Apps (Key-tagged but not mapped)
+summary_df['CRITICAL: Ghost Apps'] = summary_df['# Ghost Apps (Key but Not Mapped)'] > 0
+
+# HIGH: Primary apps not Key
+summary_df['HIGH: Primary Not Key'] = summary_df['# Primary Apps Not Key'] > 0
+
+# HIGH: Secondary apps not Key
+summary_df['HIGH: Secondary Not Key'] = summary_df['# Secondary Apps Not Key'] > 0
+
+# COMBINED: Any mapping/tagging issues
+summary_df['ANY ISSUE'] = (
+    summary_df['CRITICAL: Ghost Apps'] |
+    summary_df['HIGH: Primary Not Key'] |
+    summary_df['HIGH: Secondary Not Key']
+)
+
+# Specific violation patterns
+summary_df['Ghost Apps + No Risk'] = (
+    (summary_df['# Ghost Apps (Key but Not Mapped)'] > 0) &
     (~summary_df['Any IT/IS Risk Applicable'])
 )
 
-# VIOLATION 2: Secondary apps not tagged as Key (should be Key in at least one KPA)
-summary_df['VIOLATION: Secondary Not Key'] = summary_df['# Secondary Apps Missing Key'] > 0
-
-# VIOLATION 3: Any Key apps but no IT/IS risk (logical inconsistency)
-summary_df['VIOLATION: Key Apps + No Risk'] = (
-    (summary_df['Total Key Apps'] > 0) &
+summary_df['Primary Not Key + No Risk'] = (
+    (summary_df['# Primary Apps Not Key'] > 0) &
+    (summary_df['Total Primary Key Apps'] == 0) &  # NO Primary apps are Key
+    (summary_df['Total Secondary Key Apps'] == 0) &  # NO Secondary apps are Key either
     (~summary_df['Any IT/IS Risk Applicable'])
 )
 
-# HIGH PRIORITY: Violations without documented overrides
-summary_df['HIGH PRIORITY: Violation + No Override'] = (
-    (summary_df['VIOLATION: Secondary Key + No Risk'] | summary_df['VIOLATION: Key Apps + No Risk']) &
-    (~summary_df['Any Override'])
+summary_df['Secondary Not Key + No Risk'] = (
+    (summary_df['# Secondary Apps Not Key'] > 0) &
+    (summary_df['Total Key Apps'] == 0) &
+    (~summary_df['Any IT/IS Risk Applicable'])
 )
 
-# Categorize by app pattern
-summary_df['App Pattern'] = 'No Apps'
-summary_df.loc[(summary_df['Total Primary Apps'] > 0) & (summary_df['Total Secondary Apps'] == 0), 'App Pattern'] = 'Primary Only'
-summary_df.loc[(summary_df['Total Primary Apps'] == 0) & (summary_df['Total Secondary Apps'] > 0), 'App Pattern'] = 'Secondary Only'
-summary_df.loc[(summary_df['Total Primary Apps'] > 0) & (summary_df['Total Secondary Apps'] > 0), 'App Pattern'] = 'Both Primary & Secondary'
-
 # =============================================================================
-# CRITICAL ANALYSIS: THE METHODOLOGY RULE TEST
+# CRITICAL ANALYSIS: GHOST APPS
 # =============================================================================
 
 print("="*70)
-print("METHODOLOGY COMPLIANCE ANALYSIS")
+print("CRITICAL ISSUE: GHOST APPLICATIONS")
 print("="*70)
 print()
-print("Testing documented rule:")
-print('"Secondary mapped applications impact the assessment of IT and IS')
-print(' inherent risk of the audit entity."')
+print("Ghost Apps = Applications tagged as Key in KPAs but NOT mapped to the entity")
+print("Impact: Risk calculation uses WRONG applications")
 print()
 
-# The critical test: Secondary Key apps
-secondary_key_entities = summary_df[summary_df['Secondary Key Apps'] > 0]
-violation_entities = summary_df[summary_df['VIOLATION: Secondary Key + No Risk']]
+ghost_entities = summary_df[summary_df['CRITICAL: Ghost Apps']]
+total_ghost_apps = summary_df['# Ghost Apps (Key but Not Mapped)'].sum()
 
-print(f"📊 Entities with Secondary Key apps: {len(secondary_key_entities)}")
-if len(secondary_key_entities) > 0:
-    pct_with_risk = (secondary_key_entities['Any IT/IS Risk Applicable'].sum() / len(secondary_key_entities)) * 100
-    print(f"   └─ Have IT/IS risk applicable: {secondary_key_entities['Any IT/IS Risk Applicable'].sum()} ({pct_with_risk:.1f}%)")
-    print(f"   └─ Do NOT have IT/IS risk: {len(violation_entities)} ({100-pct_with_risk:.1f}%)")
+if len(ghost_entities) > 0:
+    print(f"⚠️  CRITICAL DATA INTEGRITY ISSUE DETECTED")
+    print(f"   {len(ghost_entities)} entities have ghost applications ({len(ghost_entities)/len(summary_df)*100:.1f}%)")
+    print(f"   {total_ghost_apps} total ghost apps affecting risk calculations")
+    print(f"   ")
+    print(f"   Avg ghost apps per affected entity: {total_ghost_apps/len(ghost_entities):.1f}")
     
-    if len(violation_entities) > 0:
-        print(f"\n⚠️  METHODOLOGY VIOLATION DETECTED")
-        print(f"   {len(violation_entities)} entities have Secondary Key apps but no IT/IS risk")
-        print(f"   This violates the documented rule.")
-        
-        # Check if these are overrides
-        violations_with_override = violation_entities[violation_entities['Any Override']]
-        violations_no_override = violation_entities[~violation_entities['Any Override']]
-        
-        if len(violations_with_override) > 0:
-            print(f"\n   {len(violations_with_override)} have documented overrides")
-            print(f"   └─ These require review: Is override rationale valid?")
-        
-        if len(violations_no_override) > 0:
-            print(f"\n   {len(violations_no_override)} have NO documented overrides")
-            print(f"   └─ These are HIGH PRIORITY - likely system/process issue")
-            print(f"   └─ Avg Secondary Key apps per entity: {violations_no_override['Secondary Key Apps'].mean():.1f}")
-print()
-
-# =============================================================================
-# PATTERN DISCOVERY ANALYSIS
-# =============================================================================
-
-print("="*70)
-print("PATTERN DISCOVERY: What drives IT/IS risk?")
-print("="*70)
-print()
-
-# Test: Primary Key vs Secondary Key
-print("📊 Primary Key Apps Analysis")
-primary_key_entities = summary_df[summary_df['Primary Key Apps'] > 0]
-if len(primary_key_entities) > 0:
-    pct = (primary_key_entities['Any IT/IS Risk Applicable'].sum() / len(primary_key_entities)) * 100
-    print(f"   Entities with Primary Key apps: {len(primary_key_entities)}")
-    print(f"   └─ IT/IS risk applicable: {primary_key_entities['Any IT/IS Risk Applicable'].sum()} ({pct:.1f}%)")
-
-print("\n📊 Secondary Key Apps Analysis")
-if len(secondary_key_entities) > 0:
-    pct = (secondary_key_entities['Any IT/IS Risk Applicable'].sum() / len(secondary_key_entities)) * 100
-    print(f"   Entities with Secondary Key apps: {len(secondary_key_entities)}")
-    print(f"   └─ IT/IS risk applicable: {secondary_key_entities['Any IT/IS Risk Applicable'].sum()} ({pct:.1f}%)")
-
-# The smoking gun comparison
-if len(primary_key_entities) > 0 and len(secondary_key_entities) > 0:
-    primary_pct = (primary_key_entities['Any IT/IS Risk Applicable'].sum() / len(primary_key_entities)) * 100
-    secondary_pct = (secondary_key_entities['Any IT/IS Risk Applicable'].sum() / len(secondary_key_entities)) * 100
+    # Check how many have wrong risk
+    ghost_no_risk = summary_df[summary_df['Ghost Apps + No Risk']]
+    if len(ghost_no_risk) > 0:
+        print(f"   {len(ghost_no_risk)} have ghost apps but NO IT/IS risk (automation failure)")
     
-    print(f"\n🔍 COMPARISON:")
-    print(f"   Primary Key apps → {primary_pct:.1f}% have IT/IS risk")
-    print(f"   Secondary Key apps → {secondary_pct:.1f}% have IT/IS risk")
-    
-    if abs(primary_pct - secondary_pct) > 30:
-        print(f"\n   ⚠️  SIGNIFICANT GAP: {abs(primary_pct - secondary_pct):.1f} percentage points")
-        if secondary_pct < primary_pct:
-            print(f"   This suggests the automation may only populate IT/IS risk for Primary apps")
-            print(f"   This would be a SYSTEM BUG (violates documented methodology)")
+    print(f"   ")
+    print(f"   These entities have INCORRECT risk ratings (using wrong apps)")
+else:
+    print(f"✓ No ghost applications detected")
 
 print()
 
 # =============================================================================
-# KEY FINDINGS SUMMARY
+# PRIMARY APPS ANALYSIS
 # =============================================================================
 
 print("="*70)
-print("KEY FINDINGS")
+print("PRIMARY APPLICATIONS NOT TAGGED AS KEY")
 print("="*70)
+print()
 
-# Finding 1: The Rule Violation
-print(f"\n🔍 FINDING 1: Methodology Rule Violation")
-print(f"   Rule: 'Secondary mapped applications impact IT and IS inherent risk'")
-print(f"   ")
-print(f"   Entities violating this rule: {len(violation_entities)} ({len(violation_entities)/len(summary_df)*100:.1f}%)")
-if len(violation_entities) > 0:
-    print(f"   └─ Avg Secondary Key apps: {violation_entities['Secondary Key Apps'].mean():.1f}")
-    print(f"   └─ Total Secondary Key apps affected: {violation_entities['Secondary Key Apps'].sum()}")
+primary_issue_entities = summary_df[summary_df['HIGH: Primary Not Key']]
+total_primary_not_key = summary_df['# Primary Apps Not Key'].sum()
+
+print(f"Entities with Primary apps: {len(summary_df[summary_df['Total Primary Apps'] > 0])}")
+print(f"Entities with Primary apps NOT Key: {len(primary_issue_entities)} ({len(primary_issue_entities)/len(summary_df)*100:.1f}%)")
+print(f"Total Primary apps NOT tagged as Key: {total_primary_not_key}")
+print()
+
+if len(primary_issue_entities) > 0:
+    # Check impact on risk
+    primary_no_risk = summary_df[summary_df['Primary Not Key + No Risk']]
+    primary_have_risk = primary_issue_entities[primary_issue_entities['Any IT/IS Risk Applicable']]
     
-    violations_no_override = violation_entities[~violation_entities['Any Override']]
-    if len(violations_no_override) > 0:
-        print(f"   └─ HIGH PRIORITY (no override): {len(violations_no_override)}")
-
-# Finding 2: Tagging Compliance
-missing_key_tags = summary_df[summary_df['VIOLATION: Secondary Not Key']]
-print(f"\n🔍 FINDING 2: Tagging Compliance")
-print(f"   Rule: Secondary apps should be Key in at least one KPA")
-print(f"   ")
-print(f"   Entities with Secondary apps not tagged as Key: {len(missing_key_tags)} ({len(missing_key_tags)/len(summary_df)*100:.1f}%)")
-if len(missing_key_tags) > 0:
-    print(f"   └─ Total Secondary apps missing Key tag: {missing_key_tags['# Secondary Apps Missing Key'].sum()}")
-
-# Finding 3: Override Analysis
-if RISKS_IT_OVERRIDE_ACTUAL:
-    overridden = summary_df[summary_df['Any Override']]
-    overridden_violations = overridden[overridden['VIOLATION: Secondary Key + No Risk'] | overridden['VIOLATION: Key Apps + No Risk']]
+    print(f"📊 Impact Analysis:")
+    print(f"   {len(primary_no_risk)} have Primary not Key + NO IT/IS risk")
+    print(f"   └─ Confirmed understated risk")
+    print(f"   ")
+    print(f"   {len(primary_have_risk)} have Primary not Key + IT/IS risk from other apps")
+    print(f"   └─ Risk MIGHT be understated (need ARA data to confirm)")
+    print(f"   ")
+    print(f"   Avg Primary apps not Key per entity: {primary_issue_entities['# Primary Apps Not Key'].mean():.1f}")
     
-    print(f"\n🔍 FINDING 3: Manual Override Analysis")
-    print(f"   Total entities with overrides: {len(overridden)} ({len(overridden)/len(summary_df)*100:.1f}%)")
-    if len(overridden_violations) > 0:
-        print(f"   └─ Overrides on entities with Key apps: {len(overridden_violations)}")
-        print(f"   └─ These require review: Is rationale documented and valid?")
+    # Distribution
+    print(f"\n   Distribution:")
+    print(f"   1-2 Primary apps not Key: {len(primary_issue_entities[primary_issue_entities['# Primary Apps Not Key'] <= 2])}")
+    print(f"   3-5 Primary apps not Key: {len(primary_issue_entities[(primary_issue_entities['# Primary Apps Not Key'] > 2) & (primary_issue_entities['# Primary Apps Not Key'] <= 5)])}")
+    print(f"   6+ Primary apps not Key: {len(primary_issue_entities[primary_issue_entities['# Primary Apps Not Key'] > 5])}")
+
+print()
+
+# =============================================================================
+# SECONDARY APPS ANALYSIS
+# =============================================================================
+
+print("="*70)
+print("SECONDARY APPLICATIONS NOT TAGGED AS KEY")
+print("="*70)
+print()
+
+secondary_issue_entities = summary_df[summary_df['HIGH: Secondary Not Key']]
+total_secondary_not_key = summary_df['# Secondary Apps Not Key'].sum()
+
+print(f"Entities with Secondary apps: {len(summary_df[summary_df['Total Secondary Apps'] > 0])}")
+print(f"Entities with Secondary apps NOT Key: {len(secondary_issue_entities)} ({len(secondary_issue_entities)/len(summary_df)*100:.1f}%)")
+print(f"Total Secondary apps NOT tagged as Key: {total_secondary_not_key}")
+print()
+
+if len(secondary_issue_entities) > 0:
+    # Check impact on risk
+    secondary_no_risk = summary_df[summary_df['Secondary Not Key + No Risk']]
+    secondary_have_risk = secondary_issue_entities[secondary_issue_entities['Any IT/IS Risk Applicable']]
+    
+    print(f"📊 Impact Analysis:")
+    print(f"   {len(secondary_no_risk)} have Secondary not Key + NO IT/IS risk")
+    print(f"   └─ Confirmed understated risk")
+    print(f"   ")
+    print(f"   {len(secondary_have_risk)} have Secondary not Key + IT/IS risk from other apps")
+    print(f"   └─ Risk MIGHT be understated (need ARA data to confirm)")
+    print(f"   ")
+    print(f"   Avg Secondary apps not Key per entity: {secondary_issue_entities['# Secondary Apps Not Key'].mean():.1f}")
+
+print()
+
+# =============================================================================
+# COMBINED ISSUES ANALYSIS
+# =============================================================================
+
+print("="*70)
+print("COMBINED ISSUES")
+print("="*70)
+print()
+
+any_issue = summary_df[summary_df['ANY ISSUE']]
+print(f"Total entities with ANY mapping/tagging issue: {len(any_issue)} ({len(any_issue)/len(summary_df)*100:.1f}%)")
+print()
+
+# Multiple issues
+ghost_and_primary = summary_df[(summary_df['CRITICAL: Ghost Apps']) & (summary_df['HIGH: Primary Not Key'])]
+ghost_and_secondary = summary_df[(summary_df['CRITICAL: Ghost Apps']) & (summary_df['HIGH: Secondary Not Key'])]
+primary_and_secondary = summary_df[(summary_df['HIGH: Primary Not Key']) & (summary_df['HIGH: Secondary Not Key'])]
+all_three = summary_df[(summary_df['CRITICAL: Ghost Apps']) & (summary_df['HIGH: Primary Not Key']) & (summary_df['HIGH: Secondary Not Key'])]
+
+print(f"Entities with multiple issues:")
+print(f"   Ghost + Primary not Key: {len(ghost_and_primary)}")
+print(f"   Ghost + Secondary not Key: {len(ghost_and_secondary)}")
+print(f"   Primary + Secondary not Key: {len(primary_and_secondary)}")
+print(f"   All three issues: {len(all_three)}")
 
 print()
 
@@ -415,99 +430,73 @@ print("EXPORTING RESULTS")
 print("="*70)
 
 # Export 1: Full analysis
-summary_df.to_excel(OUTPUT_FULL_ANALYSIS, index=False)
+summary_df_export = summary_df.copy()
+# Reorder columns for clarity
+cols_order = [
+    'Audit Entity ID',
+    'CRITICAL: Ghost Apps',
+    'HIGH: Primary Not Key',
+    'HIGH: Secondary Not Key',
+    '# Ghost Apps (Key but Not Mapped)',
+    '# Primary Apps Not Key',
+    '# Secondary Apps Not Key',
+    'Total Primary Apps',
+    'Total Secondary Apps',
+    'Primary Key Apps',
+    'Secondary Key Apps',
+    'Total Key Apps',
+    'IT Risk',
+    'IS Risk',
+    'Any IT/IS Risk Applicable'
+]
+# Add remaining columns
+remaining_cols = [col for col in summary_df.columns if col not in cols_order]
+summary_df_export = summary_df_export[cols_order + remaining_cols]
+
+summary_df_export.to_excel(OUTPUT_FULL_ANALYSIS, index=False)
 print(f"✓ {OUTPUT_FULL_ANALYSIS}")
 
-# Export 2: Methodology Violations (prioritized)
-violations_list = []
+# Export 2: Ghost Apps (CRITICAL)
+if len(ghost_entities) > 0:
+    ghost_export = ghost_entities.sort_values('# Ghost Apps (Key but Not Mapped)', ascending=False)
+    ghost_export.to_excel(OUTPUT_CRITICAL_ISSUES, index=False)
+    print(f"✓ {OUTPUT_CRITICAL_ISSUES}")
 
-# Priority 1: Secondary Key + No Risk + No Override
-priority_1 = summary_df[
-    (summary_df['VIOLATION: Secondary Key + No Risk']) &
-    (~summary_df['Any Override'])
-].copy()
-priority_1['Priority'] = 1
-priority_1['Issue'] = 'Secondary Key apps but no IT/IS risk (NO override)'
-priority_1['Rule Violated'] = 'Secondary apps impact IT/IS inherent risk'
+# Export 3: Primary Apps Not Key
+if len(primary_issue_entities) > 0:
+    primary_export = primary_issue_entities.sort_values('# Primary Apps Not Key', ascending=False)
+    primary_export.to_excel(OUTPUT_PRIMARY_ANALYSIS, index=False)
+    print(f"✓ {OUTPUT_PRIMARY_ANALYSIS}")
 
-# Priority 2: Secondary Key + No Risk + Has Override (need to review rationale)
-priority_2 = summary_df[
-    (summary_df['VIOLATION: Secondary Key + No Risk']) &
-    (summary_df['Any Override'])
-].copy()
-priority_2['Priority'] = 2
-priority_2['Issue'] = 'Secondary Key apps but no IT/IS risk (override exists)'
-priority_2['Rule Violated'] = 'Secondary apps impact IT/IS inherent risk - verify override rationale'
+# Export 4: Secondary Apps Not Key
+if len(secondary_issue_entities) > 0:
+    secondary_export = secondary_issue_entities.sort_values('# Secondary Apps Not Key', ascending=False)
+    secondary_export.to_excel(OUTPUT_SECONDARY_ANALYSIS, index=False)
+    print(f"✓ {OUTPUT_SECONDARY_ANALYSIS}")
 
-# Priority 3: Secondary apps not tagged as Key
-priority_3 = summary_df[
-    (summary_df['VIOLATION: Secondary Not Key']) &
-    (~summary_df['VIOLATION: Secondary Key + No Risk'])  # Not already in P1/P2
-].copy()
-priority_3['Priority'] = 3
-priority_3['Issue'] = 'Secondary apps missing Key designation'
-priority_3['Rule Violated'] = 'Secondary apps should be Key in at least one KPA'
-
-violations_df = pd.concat([priority_1, priority_2, priority_3], ignore_index=True)
-if len(violations_df) > 0:
-    violations_df = violations_df.sort_values(['Priority', 'Secondary Key Apps'], ascending=[True, False])
-    violations_df.to_excel(OUTPUT_METHODOLOGY_VIOLATIONS, index=False)
-    print(f"✓ {OUTPUT_METHODOLOGY_VIOLATIONS}")
-
-# Export 3: Pattern Discovery
-with pd.ExcelWriter(OUTPUT_PATTERN_DISCOVERY, engine='openpyxl') as writer:
-    # Sheet 1: Summary stats
-    pattern_stats = []
-    for pattern in ['No Apps', 'Primary Only', 'Secondary Only', 'Both Primary & Secondary']:
-        pattern_df = summary_df[summary_df['App Pattern'] == pattern]
-        if len(pattern_df) > 0:
-            pattern_stats.append({
-                'App Pattern': pattern,
-                'Count': len(pattern_df),
-                '% of Total': round(len(pattern_df)/len(summary_df)*100, 1),
-                'Avg Primary Apps': round(pattern_df['Total Primary Apps'].mean(), 1),
-                'Avg Secondary Apps': round(pattern_df['Total Secondary Apps'].mean(), 1),
-                'Avg Key Apps': round(pattern_df['Total Key Apps'].mean(), 1),
-                '% with IT/IS Risk': round((pattern_df['Any IT/IS Risk Applicable'].sum()/len(pattern_df))*100, 1)
-            })
-    
-    pd.DataFrame(pattern_stats).to_excel(writer, sheet_name='Pattern Summary', index=False)
-    
-    # Sheet 2: Primary vs Secondary Key comparison
-    comparison = pd.DataFrame([
-        {
-            'Category': 'Primary Key Apps',
-            'Entities': len(primary_key_entities),
-            '% with IT/IS Risk': round((primary_key_entities['Any IT/IS Risk Applicable'].sum()/len(primary_key_entities))*100, 1) if len(primary_key_entities) > 0 else 0,
-            'Avg Key Apps': round(primary_key_entities['Primary Key Apps'].mean(), 1) if len(primary_key_entities) > 0 else 0
-        },
-        {
-            'Category': 'Secondary Key Apps',
-            'Entities': len(secondary_key_entities),
-            '% with IT/IS Risk': round((secondary_key_entities['Any IT/IS Risk Applicable'].sum()/len(secondary_key_entities))*100, 1) if len(secondary_key_entities) > 0 else 0,
-            'Avg Key Apps': round(secondary_key_entities['Secondary Key Apps'].mean(), 1) if len(secondary_key_entities) > 0 else 0
-        }
-    ])
-    comparison.to_excel(writer, sheet_name='Primary vs Secondary', index=False)
-    
-    # Sheet 3: Violation details
-    if len(violation_entities) > 0:
-        violation_entities.to_excel(writer, sheet_name='Secondary Key No Risk', index=False)
-
-print(f"✓ {OUTPUT_PATTERN_DISCOVERY}")
-
-# Export 4: Executive Summary
+# Export 5: Executive Summary
 exec_summary = pd.DataFrame([
-    {'Metric': 'Total Entities Analyzed', 'Value': len(summary_df)},
-    {'Metric': 'Entities with Methodology Violations', 'Value': len(violations_df) if len(violations_df) > 0 else 0},
-    {'Metric': 'Priority 1 (Secondary Key + No Risk + No Override)', 'Value': len(priority_1)},
-    {'Metric': 'Priority 2 (Secondary Key + No Risk + Has Override)', 'Value': len(priority_2)},
-    {'Metric': 'Priority 3 (Secondary Missing Key Tag)', 'Value': len(priority_3)},
-    {'Metric': '', 'Value': ''},
-    {'Metric': 'Entities with Secondary Key Apps', 'Value': len(secondary_key_entities)},
-    {'Metric': '└─ % with IT/IS Risk', 'Value': f"{(secondary_key_entities['Any IT/IS Risk Applicable'].sum()/len(secondary_key_entities))*100:.1f}%" if len(secondary_key_entities) > 0 else 'N/A'},
-    {'Metric': 'Entities with Primary Key Apps', 'Value': len(primary_key_entities)},
-    {'Metric': '└─ % with IT/IS Risk', 'Value': f"{(primary_key_entities['Any IT/IS Risk Applicable'].sum()/len(primary_key_entities))*100:.1f}%" if len(primary_key_entities) > 0 else 'N/A'}
+    {'Metric': 'Total Entities Analyzed', 'Value': len(summary_df), 'Severity': ''},
+    {'Metric': '', 'Value': '', 'Severity': ''},
+    {'Metric': 'CRITICAL: Ghost Applications', 'Value': '', 'Severity': 'CRITICAL'},
+    {'Metric': '└─ Entities with ghost apps', 'Value': len(ghost_entities), 'Severity': ''},
+    {'Metric': '└─ Total ghost apps', 'Value': int(total_ghost_apps), 'Severity': ''},
+    {'Metric': '└─ Impact', 'Value': 'Risk ratings using WRONG apps', 'Severity': ''},
+    {'Metric': '', 'Value': '', 'Severity': ''},
+    {'Metric': 'HIGH: Primary Apps Not Tagged as Key', 'Value': '', 'Severity': 'HIGH'},
+    {'Metric': '└─ Entities affected', 'Value': len(primary_issue_entities), 'Severity': ''},
+    {'Metric': '└─ Total Primary apps not Key', 'Value': int(total_primary_not_key), 'Severity': ''},
+    {'Metric': '└─ With NO IT/IS risk', 'Value': len(primary_no_risk) if len(primary_issue_entities) > 0 else 0, 'Severity': ''},
+    {'Metric': '└─ With IT/IS risk (unknown if correct)', 'Value': len(primary_have_risk) if len(primary_issue_entities) > 0 else 0, 'Severity': ''},
+    {'Metric': '', 'Value': '', 'Severity': ''},
+    {'Metric': 'HIGH: Secondary Apps Not Tagged as Key', 'Value': '', 'Severity': 'HIGH'},
+    {'Metric': '└─ Entities affected', 'Value': len(secondary_issue_entities), 'Severity': ''},
+    {'Metric': '└─ Total Secondary apps not Key', 'Value': int(total_secondary_not_key), 'Severity': ''},
+    {'Metric': '└─ With NO IT/IS risk', 'Value': len(secondary_no_risk) if len(secondary_issue_entities) > 0 else 0, 'Severity': ''},
+    {'Metric': '└─ With IT/IS risk (unknown if correct)', 'Value': len(secondary_have_risk) if len(secondary_issue_entities) > 0 else 0, 'Severity': ''},
+    {'Metric': '', 'Value': '', 'Severity': ''},
+    {'Metric': 'TOTAL ENTITIES WITH ANY ISSUE', 'Value': len(any_issue), 'Severity': ''},
+    {'Metric': '└─ % of total', 'Value': f"{len(any_issue)/len(summary_df)*100:.1f}%", 'Severity': ''},
 ])
 exec_summary.to_excel(OUTPUT_EXECUTIVE_SUMMARY, index=False)
 print(f"✓ {OUTPUT_EXECUTIVE_SUMMARY}")
@@ -519,52 +508,166 @@ print(f"✓ {OUTPUT_EXECUTIVE_SUMMARY}")
 print("\n" + "="*70)
 print("ANALYSIS COMPLETE")
 print("="*70)
-print(f"\n📊 Key Numbers:")
-print(f"   Total entities: {len(summary_df)}")
-print(f"   Methodology violations: {len(violations_df) if len(violations_df) > 0 else 0}")
-if len(violations_df) > 0:
-    print(f"   └─ Priority 1 (HIGH): {len(priority_1)}")
-    print(f"   └─ Priority 2 (Review override): {len(priority_2)}")
-    print(f"   └─ Priority 3 (Tagging): {len(priority_3)}")
-
-print(f"\n📁 Files Created:")
-print(f"   1. {OUTPUT_FULL_ANALYSIS} - Complete dataset")
-print(f"   2. {OUTPUT_METHODOLOGY_VIOLATIONS} - Prioritized violations")
-print(f"   3. {OUTPUT_PATTERN_DISCOVERY} - Pattern analysis")
-print(f"   4. {OUTPUT_EXECUTIVE_SUMMARY} - Summary metrics")
-
+print(f"\n📊 Summary of Issues:")
+print(f"   CRITICAL - Ghost Apps: {len(ghost_entities)} entities, {int(total_ghost_apps)} apps")
+print(f"   HIGH - Primary Not Key: {len(primary_issue_entities)} entities, {int(total_primary_not_key)} apps")
+print(f"   HIGH - Secondary Not Key: {len(secondary_issue_entities)} entities, {int(total_secondary_not_key)} apps")
+print(f"   ")
+print(f"   Total entities with issues: {len(any_issue)} ({len(any_issue)/len(summary_df)*100:.1f}%)")
 print("\n" + "="*70)
 ```
 
 ---
 
-## **Part 3: Your Discussion Framework**
+## **What This Script Now Does**
 
-### **The Three Key Concepts to Clarify:**
+### **1. Ghost App Detection (NEW - CRITICAL)**
+- Identifies apps tagged as Key in KPAs but NOT mapped to the entity
+- These cause WRONG risk calculations
+- Highest priority issue
 
-#### **Concept 1: Risk Exists Where It Resides, Not Where It's Managed**
+### **2. Primary Apps Not Key Analysis (NEW)**
+- Shows which Primary apps aren't tagged as Key
+- Counts and percentages
+- Impact on risk (none vs. might be understated)
 
-**Example:**
-> "The encryption services entity helps mitigate fraud risk, but fraud risk doesn't reside there - so it's Not Applicable. BUT, IT/IS risk DOES reside in the encryption entity, so IT/IS risk IS applicable."
+### **3. Secondary Apps Not Key Analysis (ENHANCED)**
+- Your original finding
+- Now shows impact more clearly
+- Distinguishes confirmed vs. potential understatement
 
-**Application to your finding:**
-> "An AML audit entity uses 13 applications to perform AML processes. The IT/IS testing might happen in the Primary entity for those apps, but the IT/IS RISK resides in the AML entity because the AML process depends on those apps."
+### **4. Combined Analysis (NEW)**
+- Shows entities with multiple issues
+- Helps prioritize worst cases
 
-#### **Concept 2: Risk Applicability ≠ Testing Location**
+---
 
-**The Rule:**
+## **Output Files**
+
+### **File 1: `full_analysis_with_flags.xlsx`**
+Complete dataset with all metrics and flags
+
+**Key columns:**
+- `CRITICAL: Ghost Apps` - TRUE/FALSE flag
+- `HIGH: Primary Not Key` - TRUE/FALSE flag
+- `HIGH: Secondary Not Key` - TRUE/FALSE flag
+- `# Ghost Apps (Key but Not Mapped)` - count
+- `Ghost App IDs` - comma-separated list
+- `# Primary Apps Not Key` - count
+- `Primary Not Key IDs` - comma-separated list
+- `# Secondary Apps Not Key` - count
+- `Secondary Not Key IDs` - comma-separated list
+
+### **File 2: `critical_issues_ghost_apps.xlsx`**
+Only entities with ghost apps - INVESTIGATE THESE FIRST
+
+### **File 3: `primary_apps_not_key_analysis.xlsx`**
+All entities with Primary apps not tagged as Key
+
+### **File 4: `secondary_apps_not_key_analysis.xlsx`**
+All entities with Secondary apps not tagged as Key
+
+### **File 5: `executive_summary.xlsx`**
+One-page summary with counts and severity
+
+---
+
+## **After Running the Script**
+
+### **Step 1: Check Console Output**
+
+Look for:
 ```
-Secondary apps impact IT/IS inherent risk (risk EXISTS)
-BUT
-Primary testing occurs in Primary entity (testing LOCATION)
+⚠️ CRITICAL DATA INTEGRITY ISSUE DETECTED
+   XX entities have ghost applications
+   XXX total ghost apps affecting risk calculations
 ```
 
-**What this means:**
-- ✅ Secondary entity: IT/IS risk = Applicable
-- ✅ Primary entity: Where IT/IS testing occurs
-- ✅ Secondary entity: Reviews Primary entity IT findings for impact
+**Write down:**
+- # entities with ghost apps: _____
+- # total ghost apps: _____
 
-**The confusion:**
+### **Step 2: Review Executive Summary**
+
+Open `executive_summary.xlsx`
+
+**Write down the key numbers:**
 ```
-Wrong thinking: "We don't test IT here → IT risk doesn't apply"
-Right thinking: "We don't test IT here → IT risk DOES apply, but coordination with Primary entity needed"
+Ghost Apps:
+- Entities: _____
+- Total apps: _____
+
+Primary Not Key:
+- Entities: _____
+- Total apps: _____
+- With NO risk: _____
+- With risk (unknown if correct): _____
+
+Secondary Not Key:
+- Entities: _____
+- Total apps: _____
+- With NO risk: _____
+- With risk (unknown if correct): _____
+```
+
+### **Step 3: Investigate Ghost Apps (PRIORITY 1)**
+
+Open `critical_issues_ghost_apps.xlsx`
+
+**Sort by `# Ghost Apps (Key but Not Mapped)` (descending)**
+
+**Pick top 5-10 for investigation**
+
+For each:
+1. What are the ghost app IDs?
+2. Where do those apps actually belong? (check other entities)
+3. What apps SHOULD be in the KPA instead?
+4. Is the risk rating wrong?
+
+### **Step 4: Investigate Primary Apps Not Key**
+
+Open `primary_apps_not_key_analysis.xlsx`
+
+**Filter/Sort options:**
+
+**Option A: Entities with NO risk (confirmed issue)**
+```
+Filter: Any IT/IS Risk Applicable = FALSE
+Sort by: # Primary Apps Not Key (descending)
+```
+
+**Option B: Entities with highest counts**
+```
+Sort by: # Primary Apps Not Key (descending)
+Take top 10
+```
+
+**For sampling:**
+- Pick 5 with NO risk
+- Pick 5 with risk (to see if risk is understated)
+
+### **Step 5: Investigate Secondary Apps Not Key**
+
+Open `secondary_apps_not_key_analysis.xlsx`
+
+Same approach as Primary apps
+
+### **Step 6: Look for Patterns in Full Analysis**
+
+Open `full_analysis_with_flags.xlsx`
+
+**Create Pivot Table:**
+
+**Rows:** All three flag columns
+- CRITICAL: Ghost Apps
+- HIGH: Primary Not Key  
+- HIGH: Secondary Not Key
+
+**Values:** Count of Audit Entity ID
+
+**This shows you the distribution:**
+```
+Ghost=Yes, Primary=Yes, Secondary=Yes: X entities (worst)
+Ghost=Yes, Primary=No, Secondary=Yes: X entities
+Ghost=No, Primary=Yes, Secondary=Yes: X entities
+... etc
