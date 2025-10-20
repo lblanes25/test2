@@ -1,0 +1,347 @@
+"""
+QUICK L2 KEY RISK CHECK
+Purpose: Determine if L2 mappings explain systemic patterns
+Handles: Multiple L1 categories per L2 Key Risk in one cell
+"""
+
+import pandas as pd
+import re
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+RISKS_FILE = "audit_entity_risks.xlsx"
+L2_MAPPING_FILE = "l2_key_risks.xlsx"  # Your file name here
+
+RISKS_SHEET = 0
+L2_SHEET = 0
+
+# Column names - ADJUST THESE TO YOUR ACTUAL COLUMN NAMES
+RISKS_AE_ID_COL = "Audit Entity ID"
+RISKS_IT_COL = "Information Technology Inherent Risk"
+RISKS_IS_COL = "Information Security Inherent Risk"
+
+L2_AE_ID_COL = "Audit Entity ID"
+L2_KEY_RISK_COL = "Key Risk"  # ← ADJUST: Your L2 Key Risk name column
+L2_L1_CATEGORIES_COL = "Tagged L1s"  # ← ADJUST: Your L1 categories column (multi-value)
+
+RISK_APPLICABLE_VALUES = ['Critical', 'High', 'Medium', 'Low']
+
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
+def find_column(df, target_col):
+    col_map = {col.lower().strip(): col for col in df.columns}
+    actual_col = col_map.get(target_col.lower().strip())
+    if actual_col is None:
+        raise ValueError(f"Column '{target_col}' not found. Available: {list(df.columns)}")
+    return actual_col
+
+def is_risk_applicable(risk_value):
+    if pd.isna(risk_value):
+        return False
+    return str(risk_value).strip() in RISK_APPLICABLE_VALUES
+
+def parse_l1_categories(value):
+    """
+    Parse L1 categories from a cell like:
+    "Compliance, Third Party, Information Systems Information Technology"
+    
+    Returns dict: {'IT': bool, 'IS': bool, 'TP': bool, 'Compliance': bool}
+    """
+    if pd.isna(value):
+        return {'IT': False, 'IS': False, 'TP': False, 'Compliance': False}
+    
+    # Convert to string and lowercase for matching
+    text = str(value).lower()
+    
+    result = {
+        'IT': False,
+        'IS': False,
+        'TP': False,
+        'Compliance': False
+    }
+    
+    # Check for each L1 category
+    # Information Technology (various possible spellings)
+    if any(phrase in text for phrase in ['information technology', 'info technology', 'it risk']):
+        result['IT'] = True
+    
+    # Information Security (various possible spellings)
+    if any(phrase in text for phrase in ['information security', 'info security', 'information systems', 'is risk']):
+        result['IS'] = True
+    
+    # Third Party
+    if any(phrase in text for phrase in ['third party', 'third-party', '3rd party']):
+        result['TP'] = True
+    
+    # Compliance
+    if 'compliance' in text:
+        result['Compliance'] = True
+    
+    return result
+
+# =============================================================================
+# LOAD DATA
+# =============================================================================
+
+print("="*70)
+print("QUICK L2 KEY RISK CHECK")
+print("="*70)
+print()
+
+risks_df = pd.read_excel(RISKS_FILE, sheet_name=RISKS_SHEET)
+l2_df = pd.read_excel(L2_MAPPING_FILE, sheet_name=L2_SHEET)
+
+print(f"✓ Loaded {len(risks_df)} entities")
+print(f"✓ Loaded {len(l2_df)} L2 Key Risk mappings")
+print()
+
+# Map columns
+RISKS_AE_ID_ACTUAL = find_column(risks_df, RISKS_AE_ID_COL)
+RISKS_IT_ACTUAL = find_column(risks_df, RISKS_IT_COL)
+RISKS_IS_ACTUAL = find_column(risks_df, RISKS_IS_COL)
+
+L2_AE_ID_ACTUAL = find_column(l2_df, L2_AE_ID_COL)
+L2_KEY_RISK_ACTUAL = find_column(l2_df, L2_KEY_RISK_COL)
+L2_L1_CATEGORIES_ACTUAL = find_column(l2_df, L2_L1_CATEGORIES_COL)
+
+print(f"Column mapping:")
+print(f"  L2 AE ID: '{L2_AE_ID_ACTUAL}'")
+print(f"  L2 Key Risk: '{L2_KEY_RISK_ACTUAL}'")
+print(f"  L1 Categories: '{L2_L1_CATEGORIES_ACTUAL}'")
+print()
+
+# =============================================================================
+# ANALYZE L2 MAPPINGS
+# =============================================================================
+
+print("Analyzing L2 Key Risk mappings by entity...")
+print()
+
+# Show a sample of how L1 categories are being parsed
+print("Sample L1 category parsing (first 3 rows):")
+for i in range(min(3, len(l2_df))):
+    sample_value = l2_df.iloc[i][L2_L1_CATEGORIES_ACTUAL]
+    parsed = parse_l1_categories(sample_value)
+    print(f"  '{sample_value}' → IT:{parsed['IT']}, IS:{parsed['IS']}, TP:{parsed['TP']}")
+print()
+
+# Build L2 summary per entity
+l2_summary = {}
+for _, row in l2_df.iterrows():
+    ae_id = row[L2_AE_ID_ACTUAL]
+    l1_cats = parse_l1_categories(row[L2_L1_CATEGORIES_ACTUAL])
+    
+    if ae_id not in l2_summary:
+        l2_summary[ae_id] = {'has_it': False, 'has_is': False, 'has_tp': False}
+    
+    # If this L2 has IT category, mark entity as having IT L2
+    if l1_cats['IT']:
+        l2_summary[ae_id]['has_it'] = True
+    
+    # If this L2 has IS category, mark entity as having IS L2
+    if l1_cats['IS']:
+        l2_summary[ae_id]['has_is'] = True
+    
+    # If this L2 has TP category, mark entity as having TP L2
+    if l1_cats['TP']:
+        l2_summary[ae_id]['has_tp'] = True
+
+# Add L2 info to risks_df
+risks_df['Has IT L2'] = risks_df[RISKS_AE_ID_ACTUAL].apply(
+    lambda x: l2_summary.get(x, {}).get('has_it', False)
+)
+risks_df['Has IS L2'] = risks_df[RISKS_AE_ID_ACTUAL].apply(
+    lambda x: l2_summary.get(x, {}).get('has_is', False)
+)
+risks_df['Has TP L2'] = risks_df[RISKS_AE_ID_ACTUAL].apply(
+    lambda x: l2_summary.get(x, {}).get('has_tp', False)
+)
+
+risks_df['IT Risk Applicable'] = risks_df[RISKS_IT_ACTUAL].apply(is_risk_applicable)
+risks_df['IS Risk Applicable'] = risks_df[RISKS_IS_ACTUAL].apply(is_risk_applicable)
+
+# =============================================================================
+# KEY STATISTICS
+# =============================================================================
+
+total_entities = len(risks_df)
+
+# L2 mapping patterns
+both_l2 = len(risks_df[(risks_df['Has IT L2']) & (risks_df['Has IS L2'])])
+only_it_l2 = len(risks_df[(risks_df['Has IT L2']) & (~risks_df['Has IS L2'])])
+only_is_l2 = len(risks_df[(~risks_df['Has IT L2']) & (risks_df['Has IS L2'])])
+neither_l2 = len(risks_df[(~risks_df['Has IT L2']) & (~risks_df['Has IS L2'])])
+
+# Risk applicability patterns
+both_risk = len(risks_df[(risks_df['IT Risk Applicable']) & (risks_df['IS Risk Applicable'])])
+only_it_risk = len(risks_df[(risks_df['IT Risk Applicable']) & (~risks_df['IS Risk Applicable'])])
+only_is_risk = len(risks_df[(~risks_df['IT Risk Applicable']) & (risks_df['IS Risk Applicable'])])
+neither_risk = len(risks_df[(~risks_df['IT Risk Applicable']) & (~risks_df['IS Risk Applicable'])])
+
+# The key question: Does L2 pattern match risk pattern?
+it_risk_without_it_l2 = len(risks_df[(risks_df['IT Risk Applicable']) & (~risks_df['Has IT L2'])])
+is_risk_without_is_l2 = len(risks_df[(risks_df['IS Risk Applicable']) & (~risks_df['Has IS L2'])])
+it_l2_without_it_risk = len(risks_df[(risks_df['Has IT L2']) & (~risks_df['IT Risk Applicable'])])
+is_l2_without_is_risk = len(risks_df[(risks_df['Has IS L2']) & (~risks_df['IS Risk Applicable'])])
+
+print("="*70)
+print("L2 KEY RISK MAPPING PATTERNS")
+print("="*70)
+print()
+print(f"Total entities: {total_entities}")
+print()
+print(f"L2 Mapping Distribution:")
+print(f"  Both IT and IS L2s mapped:  {both_l2:4d} ({both_l2/total_entities*100:5.1f}%)")
+print(f"  Only IT L2s mapped:         {only_it_l2:4d} ({only_it_l2/total_entities*100:5.1f}%)")
+print(f"  Only IS L2s mapped:         {only_is_l2:4d} ({only_is_l2/total_entities*100:5.1f}%)")
+print(f"  No IT or IS L2s mapped:     {neither_l2:4d} ({neither_l2/total_entities*100:5.1f}%)")
+print()
+
+print("="*70)
+print("ACTUAL RISK APPLICABILITY")
+print("="*70)
+print()
+print(f"Risk Applicability Distribution:")
+print(f"  Both IT and IS risk:        {both_risk:4d} ({both_risk/total_entities*100:5.1f}%)")
+print(f"  Only IT risk:               {only_it_risk:4d} ({only_it_risk/total_entities*100:5.1f}%)")
+print(f"  Only IS risk:               {only_is_risk:4d} ({only_is_risk/total_entities*100:5.1f}%)")
+print(f"  No IT or IS risk:           {neither_risk:4d} ({neither_risk/total_entities*100:5.1f}%)")
+print()
+
+print("="*70)
+print("KEY QUESTION: DO L2 MAPPINGS EXPLAIN RISK PATTERNS?")
+print("="*70)
+print()
+print(f"Correlation Check:")
+print(f"  Entities with only IT L2s:  {only_it_l2:4d}")
+print(f"  Entities with only IT risk: {only_it_risk:4d}")
+if only_it_l2 > 0:
+    match_rate = (only_it_risk / only_it_l2 * 100) if only_it_l2 > 0 else 0
+    print(f"  Match rate: {match_rate:.1f}%")
+print()
+print(f"  Entities with only IS L2s:  {only_is_l2:4d}")
+print(f"  Entities with only IS risk: {only_is_risk:4d}")
+if only_is_l2 > 0:
+    match_rate = (only_is_risk / only_is_l2 * 100) if only_is_l2 > 0 else 0
+    print(f"  Match rate: {match_rate:.1f}%")
+print()
+
+print(f"Mismatches (L2 vs Risk):")
+print(f"  IT risk but NO IT L2:       {it_risk_without_it_l2:4d} entities")
+print(f"  IS risk but NO IS L2:       {is_risk_without_is_l2:4d} entities")
+print(f"  IT L2 but NO IT risk:       {it_l2_without_it_risk:4d} entities (potential automation failures)")
+print(f"  IS L2 but NO IS risk:       {is_l2_without_is_risk:4d} entities (potential automation failures)")
+print()
+
+# =============================================================================
+# DECISION POINT
+# =============================================================================
+
+print("="*70)
+print("ANALYSIS RECOMMENDATION")
+print("="*70)
+print()
+
+# Calculate correlation strength
+correlation_score = 0
+
+# Strong correlation if "only IT L2" explains "only IT risk"
+if only_it_l2 > 0 and only_it_risk > 0:
+    if only_it_l2 >= (only_it_risk * 0.7):  # 70%+ match
+        correlation_score += 1
+        
+# Strong correlation if "only IS L2" explains "only IS risk"
+if only_is_l2 > 0 and only_is_risk > 0:
+    if only_is_l2 >= (only_is_risk * 0.7):
+        correlation_score += 1
+
+# Strong correlation if "neither L2" explains "neither risk"
+if neither_l2 > 0 and neither_risk > 0:
+    if neither_l2 >= (neither_risk * 0.7):
+        correlation_score += 1
+
+# High percentage have only one type
+if (only_it_l2 / total_entities > 0.2) or (only_is_l2 / total_entities > 0.2):
+    correlation_score += 1
+
+if correlation_score >= 2:
+    print("🔍 L2 ANALYSIS IS VALUABLE - ADD TO MAIN SCRIPT")
+    print()
+    print(f"  Finding: L2 mapping patterns strongly correlate with risk patterns")
+    print()
+    if only_it_l2 >= (only_it_risk * 0.7):
+        print(f"  • {only_it_l2} entities have only IT L2s")
+        print(f"    This explains why {only_it_risk} have only IT risk")
+    if only_is_l2 >= (only_is_risk * 0.7):
+        print(f"  • {only_is_l2} entities have only IS L2s")
+        print(f"    This explains why {only_is_risk} have only IS risk")
+    if neither_l2 >= (neither_risk * 0.7):
+        print(f"  • {neither_l2} entities have NO L2s")
+        print(f"    This explains why {neither_risk} have no risk")
+    print()
+    print("  Recommendation:")
+    print("  1. Add L2 mapping columns to main analysis")
+    print("  2. Enhance Observation 4 to distinguish:")
+    print("     - Missing L2 mappings (not an automation failure)")
+    print("     - True automation failures (L2 exists but risk not calculated)")
+    print("  3. Add L2 context to 'possibly understated' findings:")
+    print("     - Only flag as understated if relevant L2s are mapped")
+    
+elif it_l2_without_it_risk > (total_entities * 0.15) or is_l2_without_is_risk > (total_entities * 0.15):
+    print("🔍 L2 ANALYSIS VALUABLE FOR OBSERVATION 4")
+    print()
+    print(f"  Finding: Many entities have L2s but no risk")
+    print(f"    IT L2 but no IT risk: {it_l2_without_it_risk} ({it_l2_without_it_risk/total_entities*100:.1f}%)")
+    print(f"    IS L2 but no IS risk: {is_l2_without_is_risk} ({is_l2_without_is_risk/total_entities*100:.1f}%)")
+    print()
+    print("  Recommendation:")
+    print("  1. Add L2 analysis to Observation 4")
+    print("  2. These are TRUE automation failures (L2 mapped but risk not calculated)")
+    print("  3. Investigate why RAI isn't populating despite L2 mappings")
+    
+else:
+    print("✓ L2 ANALYSIS NOT PARTICULARLY VALUABLE")
+    print()
+    print("  Finding: L2 mapping patterns don't strongly correlate with risk patterns")
+    print()
+    print(f"  Most entities ({both_l2}, {both_l2/total_entities*100:.1f}%) have both IT and IS L2s")
+    print(f"  But only {both_risk} ({both_risk/total_entities*100:.1f}%) have both risks applicable")
+    print()
+    print("  Recommendation: Keep original 4-observation analysis as-is")
+    print()
+    print("  Why L2 doesn't add value:")
+    print("  • L2 patterns don't explain 'only IT' or 'only IS' risk patterns")
+    print("  • Your core issues (ghost apps, untagged apps) matter regardless of L2")
+    print("  • Adding L2 analysis would complicate without adding insight")
+
+print()
+print("="*70)
+
+# =============================================================================
+# OPTIONAL: EXPORT DETAIL FOR MANUAL REVIEW
+# =============================================================================
+
+output_df = risks_df[[
+    RISKS_AE_ID_ACTUAL,
+    'Has IT L2',
+    'Has IS L2',
+    'IT Risk Applicable',
+    'IS Risk Applicable'
+]].copy()
+
+output_df.columns = ['Audit Entity ID', 'Has IT L2', 'Has IS L2', 'Has IT Risk', 'Has IS Risk']
+
+# Flag interesting patterns
+output_df['Pattern'] = ''
+output_df.loc[(output_df['Has IT L2']) & (~output_df['Has IS L2']) & (output_df['Has IT Risk']) & (~output_df['Has IS Risk']), 'Pattern'] = 'Only IT (L2 matches risk)'
+output_df.loc[(~output_df['Has IT L2']) & (output_df['Has IS L2']) & (~output_df['Has IT Risk']) & (output_df['Has IS Risk']), 'Pattern'] = 'Only IS (L2 matches risk)'
+output_df.loc[(output_df['Has IT L2']) & (~output_df['Has IT Risk']), 'Pattern'] = 'IT L2 but no IT risk (automation failure?)'
+output_df.loc[(output_df['Has IS L2']) & (~output_df['Has IS Risk']), 'Pattern'] = 'IS L2 but no IS risk (automation failure?)'
+
+output_df.to_excel('L2_Quick_Check_Detail.xlsx', index=False)
+print(f"\n✓ Created L2_Quick_Check_Detail.xlsx for manual review")
+print()
