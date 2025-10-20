@@ -1,3 +1,32 @@
+"""
+IT/IS RISK APPLICABILITY ANALYSIS
+Version: 1.0
+Created: [Date]
+Analyst: [Your Name]
+
+SCRIPT LOCATION: [To be filled in - path to this script file]
+
+PURPOSE:
+Validates accuracy of IT/IS risk ratings across audit universe by:
+1. Identifying ghost applications (apps in KPAs not mapped to entity)
+2. Identifying apps not tagged as Key (Primary and Secondary)
+3. Validating impact using ARA scores
+4. Comparing to current system risk
+
+OUTPUTS:
+- 00_ExecutiveSummary.xlsx (overall results with methodology)
+- Observation1_GhostApps.xlsx (if found)
+- Observation2_PrimaryNotKey.xlsx (if found)
+- Observation3_SecondaryNotKey.xlsx (if found)
+- Observation4_AutomationFailures.xlsx (if found)
+- SourceData_FullAnalysis.xlsx (complete dataset)
+
+Each output file includes Methodology tab for reperformance.
+
+CONFIGURATION:
+Update file names and column names in CONFIGURATION section below.
+"""
+
 import pandas as pd
 import re
 
@@ -737,6 +766,122 @@ if len(secondary_issue) > 0:
 print()
 
 # =============================================================================
+# CREATE METHODOLOGY DOCUMENTATION
+# =============================================================================
+
+print("="*70)
+print("DOCUMENTING METHODOLOGY")
+print("="*70)
+
+# Count apps in ARA file for documentation
+total_ara_apps = len(ara_lookup)
+ara_apps_with_scores = len([app for app, scores in ara_lookup.items() 
+                             if scores['availability'] != 'N/A' or 
+                                scores['integrity'] != 'N/A' or 
+                                scores['confidentiality'] != 'N/A'])
+
+# Document what was analyzed
+methodology_doc = {
+    'analysis_date': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
+    'total_entities_analyzed': len(summary_df),
+    'total_ara_records': total_ara_apps,
+    'ara_records_with_scores': ara_apps_with_scores,
+    'risks_file': RISKS_FILE,
+    'kpa_file': KPA_FILE,
+    'ara_file': ARA_FILE,
+}
+
+print(f"✓ Documented methodology")
+print()
+
+# =============================================================================
+# HELPER FUNCTION: CREATE METHODOLOGY TAB
+# =============================================================================
+
+def create_methodology_tab(observation_number, observation_name, what_was_reviewed, 
+                          data_sources, analysis_steps, output_interpretation):
+    """
+    Creates a standardized methodology documentation tab.
+    """
+    methodology_df = pd.DataFrame([
+        {'Section': 'OBSERVATION METHODOLOGY', 'Detail': ''},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'Observation Number', 'Detail': observation_number},
+        {'Section': 'Observation Name', 'Detail': observation_name},
+        {'Section': 'Analysis Date', 'Detail': methodology_doc['analysis_date']},
+        {'Section': 'Analyst', 'Detail': '[Your Name]'},
+        {'Section': '', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+        {'Section': 'WHAT WAS REVIEWED', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+    ])
+    
+    # Add what was reviewed items
+    for item in what_was_reviewed:
+        methodology_df = pd.concat([methodology_df, pd.DataFrame([{'Section': '  • ', 'Detail': item}])], ignore_index=True)
+    
+    methodology_df = pd.concat([methodology_df, pd.DataFrame([
+        {'Section': '', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+        {'Section': 'DATA SOURCES', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+    ])], ignore_index=True)
+    
+    # Add data sources
+    for source_name, source_detail in data_sources.items():
+        methodology_df = pd.concat([methodology_df, pd.DataFrame([
+            {'Section': source_name, 'Detail': ''},
+        ])], ignore_index=True)
+        for detail_key, detail_value in source_detail.items():
+            methodology_df = pd.concat([methodology_df, pd.DataFrame([
+                {'Section': f'  {detail_key}', 'Detail': str(detail_value)},
+            ])], ignore_index=True)
+        methodology_df = pd.concat([methodology_df, pd.DataFrame([{'Section': '', 'Detail': ''}])], ignore_index=True)
+    
+    methodology_df = pd.concat([methodology_df, pd.DataFrame([
+        {'Section': '=' * 70, 'Detail': ''},
+        {'Section': 'ANALYSIS STEPS', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+    ])], ignore_index=True)
+    
+    # Add analysis steps
+    for i, step in enumerate(analysis_steps, 1):
+        methodology_df = pd.concat([methodology_df, pd.DataFrame([
+            {'Section': f'Step {i}', 'Detail': step},
+        ])], ignore_index=True)
+    
+    methodology_df = pd.concat([methodology_df, pd.DataFrame([
+        {'Section': '', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+        {'Section': 'OUTPUT INTERPRETATION', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+    ])], ignore_index=True)
+    
+    # Add output interpretation
+    for key, value in output_interpretation.items():
+        methodology_df = pd.concat([methodology_df, pd.DataFrame([
+            {'Section': key, 'Detail': value},
+        ])], ignore_index=True)
+    
+    methodology_df = pd.concat([methodology_df, pd.DataFrame([
+        {'Section': '', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+        {'Section': 'REPERFORMANCE INSTRUCTIONS', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'To reperform this analysis:', 'Detail': ''},
+        {'Section': '1. Obtain the three source files listed above', 'Detail': ''},
+        {'Section': '2. Run the Python script with these files as inputs', 'Detail': ''},
+        {'Section': '3. The script will regenerate all outputs', 'Detail': ''},
+        {'Section': '4. Compare results to this file', 'Detail': ''},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'Script Location', 'Detail': '[To be filled in]'},
+        {'Section': 'Script Version', 'Detail': 'v1.0 - ' + methodology_doc['analysis_date']},
+    ])], ignore_index=True)
+    
+    return methodology_df
+
+# =============================================================================
 # EXPORT OBSERVATION 1: GHOST APPS
 # =============================================================================
 
@@ -746,7 +891,61 @@ print("="*70)
 
 if len(ghost_entities) > 0:
     with pd.ExcelWriter(OUTPUT_OBSERVATION_1, engine='openpyxl') as writer:
-        # Tab 1: Summary
+        
+        # ========== METHODOLOGY TAB (FIRST) ==========
+        methodology_obs1 = create_methodology_tab(
+            observation_number='1',
+            observation_name='Ghost Applications',
+            what_was_reviewed=[
+                f'All {len(summary_df)} audit entities',
+                f'All {len(kpa_df)} KPA records across all entities',
+                f'All application mappings (Primary and Secondary) for each entity',
+                'Applications tagged as "Key" in KPAs for each entity',
+                f'ARA scores (Availability, Integrity, Confidentiality) for {total_ara_apps} applications'
+            ],
+            data_sources={
+                'Source File 1: Audit Entity Risks': {
+                    'File Name': methodology_doc['risks_file'],
+                    'Records': methodology_doc['total_entities_analyzed'],
+                    'Key Columns Used': f'{RISKS_AE_ID_COL}, {RISKS_IT_COL}, {RISKS_IS_COL}, {RISKS_PRIMARY_APPS_COL}, {RISKS_SECONDARY_APPS_COL}, {RISKS_CORE_TEAM_COL}, {RISKS_AUDIT_LEADER_COL}',
+                    'Purpose': 'Source of entity list, current risk ratings, and application mappings'
+                },
+                'Source File 2: KPA Tagging': {
+                    'File Name': methodology_doc['kpa_file'],
+                    'Records': len(kpa_df),
+                    'Key Columns Used': f'{KPA_AE_ID_COL}, {KPA_KEY_APPS_COL}',
+                    'Purpose': 'Source of applications tagged as "Key" in KPAs per entity'
+                },
+                'Source File 3: ARA Scores': {
+                    'File Name': methodology_doc['ara_file'],
+                    'Records': methodology_doc['total_ara_records'],
+                    'Records with Scores': methodology_doc['ara_records_with_scores'],
+                    'Key Columns Used': f'{ARA_APP_ID_COL}, {ARA_AVAILABILITY_COL}, {ARA_INTEGRITY_COL}, {ARA_CONFIDENTIALITY_COL}',
+                    'Purpose': 'Source of risk scores for each application'
+                }
+            },
+            analysis_steps=[
+                f'Extracted all applications mapped to each entity (Primary + Secondary) from {RISKS_FILE}',
+                f'Extracted all applications tagged as "Key" in KPAs for each entity from {KPA_FILE}',
+                'For each entity, compared Key-tagged apps against mapped apps',
+                'Identified "ghost apps" = apps tagged as Key in KPAs but NOT in mapped apps list',
+                'Flagged entities with any ghost apps as CRITICAL issue',
+                f'Retrieved ARA scores from {ARA_FILE} for ghost apps and mapped apps',
+                'Calculated what risk would be from ghost apps vs what mapped apps would give',
+                'Assessed impact: All entities with ghost apps have POSSIBLY MISSTATED risk (wrong apps being used)'
+            ],
+            output_interpretation={
+                'Ghost Apps': 'Applications in an entity\'s KPAs that are NOT mapped to that entity (Primary or Secondary)',
+                'Why Critical': 'Risk calculation uses wrong application data - the apps don\'t belong to this entity',
+                'Risk Assessment': 'POSSIBLY MISSTATED - Cannot validate accuracy without identifying correct apps',
+                'Entities Affected': f'{len(ghost_entities)} entities ({len(ghost_entities)/len(summary_df)*100:.1f}%)',
+                'Total Ghost Apps': f'{int(total_ghost_apps)} apps across all affected entities',
+                'Next Steps': 'Investigate each entity to identify correct apps, update KPAs, recalculate risk'
+            }
+        )
+        methodology_obs1.to_excel(writer, sheet_name='Methodology', index=False)
+        
+        # ========== SUMMARY TAB ==========
         obs1_summary = pd.DataFrame([
             {'Metric': 'OBSERVATION 1: GHOST APPLICATIONS', 'Value': ''},
             {'Metric': '', 'Value': ''},
@@ -763,18 +962,20 @@ if len(ghost_entities) > 0:
             {'Metric': '', 'Value': ''},
             {'Metric': 'Impact', 'Value': 'Ghost apps are WRONG apps - correct apps unknown'},
             {'Metric': 'Note', 'Value': 'Cannot validate accuracy without identifying correct apps'},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'See "Methodology" tab', 'Value': 'For complete analysis documentation'},
         ])
         obs1_summary.to_excel(writer, sheet_name='Summary', index=False)
         
-        # Tab 2: All entities with ghost apps
+        # ========== ALL GHOST APPS TAB ==========
         ghost_export = ghost_entities.sort_values('# Ghost Apps (Key but Not Mapped)', ascending=False)
         ghost_export.to_excel(writer, sheet_name='All Ghost Apps', index=False)
         
-        # Tab 3: Top 10 by ghost app count
+        # ========== TOP 10 TAB ==========
         top_ghost = ghost_export.head(10)
         top_ghost.to_excel(writer, sheet_name='Top 10', index=False)
         
-        # Tab 4: By Team and Leader
+        # ========== BY TEAM AND LEADER TAB ==========
         if RISKS_CORE_TEAM_ACTUAL and RISKS_AUDIT_LEADER_ACTUAL:
             team_leader_dist = ghost_entities.groupby(['Core Audit Team', 'Audit Leader']).agg({
                 'Audit Entity ID': 'count',
@@ -800,16 +1001,74 @@ if len(ghost_entities) > 0:
 # =============================================================================
 
 if len(primary_issue) > 0:
+    primary_higher_it = primary_issue[primary_issue['Primary Not Key: Higher than Current IT'] == True]
+    primary_higher_is = primary_issue[primary_issue['Primary Not Key: Higher than Current IS'] == True]
+    primary_higher_either = primary_issue[
+        (primary_issue['Primary Not Key: Higher than Current IT'] == True) |
+        (primary_issue['Primary Not Key: Higher than Current IS'] == True)
+    ]
+    
     with pd.ExcelWriter(OUTPUT_OBSERVATION_2, engine='openpyxl') as writer:
-        # Calculate ARA-validated metrics
-        primary_higher_it = primary_issue[primary_issue['Primary Not Key: Higher than Current IT'] == True]
-        primary_higher_is = primary_issue[primary_issue['Primary Not Key: Higher than Current IS'] == True]
-        primary_higher_either = primary_issue[
-            (primary_issue['Primary Not Key: Higher than Current IT'] == True) |
-            (primary_issue['Primary Not Key: Higher than Current IS'] == True)
-        ]
         
-        # Tab 1: Summary
+        # ========== METHODOLOGY TAB (FIRST) ==========
+        methodology_obs2 = create_methodology_tab(
+            observation_number='2',
+            observation_name='Primary Applications Not Tagged as Key',
+            what_was_reviewed=[
+                f'All {len(summary_df)} audit entities',
+                f'All applications mapped as "Primary" to each entity from {RISKS_FILE}',
+                f'All applications tagged as "Key" in KPAs from {KPA_FILE}',
+                f'Current IT and IS risk ratings for each entity from {RISKS_FILE}',
+                f'ARA scores for all Primary apps from {ARA_FILE}'
+            ],
+            data_sources={
+                'Source File 1: Audit Entity Risks': {
+                    'File Name': methodology_doc['risks_file'],
+                    'Records': methodology_doc['total_entities_analyzed'],
+                    'Key Columns Used': f'{RISKS_AE_ID_COL}, {RISKS_IT_COL}, {RISKS_IS_COL}, {RISKS_PRIMARY_APPS_COL}, {RISKS_CORE_TEAM_COL}, {RISKS_AUDIT_LEADER_COL}',
+                    'Purpose': 'Source of Primary app mappings and current risk ratings'
+                },
+                'Source File 2: KPA Tagging': {
+                    'File Name': methodology_doc['kpa_file'],
+                    'Records': len(kpa_df),
+                    'Key Columns Used': f'{KPA_AE_ID_COL}, {KPA_KEY_APPS_COL}',
+                    'Purpose': 'Source of which apps are tagged as "Key"'
+                },
+                'Source File 3: ARA Scores': {
+                    'File Name': methodology_doc['ara_file'],
+                    'Records': methodology_doc['total_ara_records'],
+                    'Key Columns Used': f'{ARA_APP_ID_COL}, {ARA_AVAILABILITY_COL}, {ARA_INTEGRITY_COL}, {ARA_CONFIDENTIALITY_COL}',
+                    'Purpose': 'Risk scores to compare current vs potential risk'
+                }
+            },
+            analysis_steps=[
+                f'Extracted all Primary apps for each entity from {RISKS_FILE}',
+                f'Extracted all Key-tagged apps for each entity from {KPA_FILE}',
+                'Compared Primary apps to Key apps - identified Primary apps NOT tagged as Key',
+                f'Retrieved current IT and IS risk ratings from {RISKS_FILE}',
+                f'Retrieved ARA scores from {ARA_FILE} for Primary not Key apps',
+                'Calculated IT risk from Primary not Key apps: max(Availability, Integrity)',
+                'Calculated IS risk from Primary not Key apps: Confidentiality',
+                'Compared calculated risk to CURRENT system risk',
+                'Flagged entities where Primary not Key apps have HIGHER risk than current as "Possibly Understated"',
+                'Flagged entities where Primary not Key apps have same/lower risk as "Appears Correct"'
+            ],
+            output_interpretation={
+                'Primary Apps Not Key': 'Applications mapped as Primary but NOT tagged as Key in any KPA',
+                'Why High Priority': 'These apps may should be considered for risk but currently aren\'t',
+                'ARA Validation Method': 'Compared ARA scores of untagged apps to CURRENT system risk',
+                'Possibly Understated': f'{len(primary_higher_either)} entities where untagged apps have HIGHER risk than current',
+                'Appears Correct': f'{len(primary_issue) - len(primary_higher_either)} entities where untagged apps have same/lower risk',
+                'Total Entities': f'{len(primary_issue)} entities with Primary apps not Key',
+                'Total Apps': f'{int(total_primary_not_key)} Primary apps not tagged as Key',
+                'IT Specific': f'{len(primary_higher_it)} entities would have higher IT risk',
+                'IS Specific': f'{len(primary_higher_is)} entities would have higher IS risk',
+                'Next Steps': 'Sample "Possibly Understated" entities to determine if apps SHOULD be Key'
+            }
+        )
+        methodology_obs2.to_excel(writer, sheet_name='Methodology', index=False)
+        
+        # ========== SUMMARY TAB ==========
         obs2_summary = pd.DataFrame([
             {'Metric': 'OBSERVATION 2: PRIMARY APPS NOT TAGGED AS KEY', 'Value': ''},
             {'Metric': '', 'Value': ''},
@@ -831,25 +1090,27 @@ if len(primary_issue) > 0:
             {'Metric': '1-2 apps not Key', 'Value': len(primary_issue[primary_issue['# Primary Apps Not Key'] <= 2])},
             {'Metric': '3-5 apps not Key', 'Value': len(primary_issue[(primary_issue['# Primary Apps Not Key'] > 2) & (primary_issue['# Primary Apps Not Key'] <= 5)])},
             {'Metric': '6+ apps not Key', 'Value': len(primary_issue[primary_issue['# Primary Apps Not Key'] > 5])},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'See "Methodology" tab', 'Value': 'For complete analysis documentation'},
         ])
         obs2_summary.to_excel(writer, sheet_name='Summary', index=False)
         
-        # Tab 2: All entities
+        # ========== ALL PRIMARY NOT KEY TAB ==========
         primary_export = primary_issue.sort_values('# Primary Apps Not Key', ascending=False)
         primary_export.to_excel(writer, sheet_name='All Primary Not Key', index=False)
         
-        # Tab 3: Possibly Understated (ARA-validated)
+        # ========== POSSIBLY UNDERSTATED TAB ==========
         primary_understated = primary_higher_either.sort_values('# Primary Apps Not Key', ascending=False)
         primary_understated.to_excel(writer, sheet_name='Possibly Understated (ARA)', index=False)
         
-        # Tab 4: High count (6+)
+        # ========== HIGH COUNT TAB ==========
         high_count = primary_issue[primary_issue['# Primary Apps Not Key'] > 5].sort_values('# Primary Apps Not Key', ascending=False)
         high_count.to_excel(writer, sheet_name='High Count (6+)', index=False)
         
-        # Tab 5: No Risk (confirmed understated)
+        # ========== NO RISK TAB ==========
         primary_no_risk.to_excel(writer, sheet_name='No Risk (Confirmed)', index=False)
         
-        # Tab 6: By Team and Leader
+        # ========== BY TEAM AND LEADER TAB ==========
         if RISKS_CORE_TEAM_ACTUAL and RISKS_AUDIT_LEADER_ACTUAL:
             team_leader_dist = primary_issue.groupby(['Core Audit Team', 'Audit Leader']).agg({
                 'Audit Entity ID': 'count',
@@ -879,16 +1140,72 @@ if len(primary_issue) > 0:
 # =============================================================================
 
 if len(secondary_issue) > 0:
+    secondary_higher_it = secondary_issue[secondary_issue['Secondary Not Key: Higher than Current IT'] == True]
+    secondary_higher_is = secondary_issue[secondary_issue['Secondary Not Key: Higher than Current IS'] == True]
+    secondary_higher_either = secondary_issue[
+        (secondary_issue['Secondary Not Key: Higher than Current IT'] == True) |
+        (secondary_issue['Secondary Not Key: Higher than Current IS'] == True)
+    ]
+    
     with pd.ExcelWriter(OUTPUT_OBSERVATION_3, engine='openpyxl') as writer:
-        # Calculate ARA-validated metrics
-        secondary_higher_it = secondary_issue[secondary_issue['Secondary Not Key: Higher than Current IT'] == True]
-        secondary_higher_is = secondary_issue[secondary_issue['Secondary Not Key: Higher than Current IS'] == True]
-        secondary_higher_either = secondary_issue[
-            (secondary_issue['Secondary Not Key: Higher than Current IT'] == True) |
-            (secondary_issue['Secondary Not Key: Higher than Current IS'] == True)
-        ]
         
-        # Tab 1: Summary
+        # ========== METHODOLOGY TAB ==========
+        methodology_obs3 = create_methodology_tab(
+            observation_number='3',
+            observation_name='Secondary Applications Not Tagged as Key',
+            what_was_reviewed=[
+                f'All {len(summary_df)} audit entities',
+                f'All applications mapped as "Secondary" to each entity from {RISKS_FILE}',
+                f'All applications tagged as "Key" in KPAs from {KPA_FILE}',
+                f'Documented methodology rule: "Secondary apps should be identified as a key application in at least one KPA"',
+                f'Current IT and IS risk ratings from {RISKS_FILE}',
+                f'ARA scores for all Secondary apps from {ARA_FILE}'
+            ],
+            data_sources={
+                'Source File 1: Audit Entity Risks': {
+                    'File Name': methodology_doc['risks_file'],
+                    'Records': methodology_doc['total_entities_analyzed'],
+                    'Key Columns Used': f'{RISKS_AE_ID_COL}, {RISKS_IT_COL}, {RISKS_IS_COL}, {RISKS_SECONDARY_APPS_COL}',
+                    'Purpose': 'Source of Secondary app mappings and current risk ratings'
+                },
+                'Source File 2: KPA Tagging': {
+                    'File Name': methodology_doc['kpa_file'],
+                    'Records': len(kpa_df),
+                    'Key Columns Used': f'{KPA_AE_ID_COL}, {KPA_KEY_APPS_COL}',
+                    'Purpose': 'Source of which apps are tagged as "Key"'
+                },
+                'Source File 3: ARA Scores': {
+                    'File Name': methodology_doc['ara_file'],
+                    'Records': methodology_doc['total_ara_records'],
+                    'Key Columns Used': f'{ARA_APP_ID_COL}, {ARA_AVAILABILITY_COL}, {ARA_INTEGRITY_COL}, {ARA_CONFIDENTIALITY_COL}',
+                    'Purpose': 'Risk scores to validate impact'
+                }
+            },
+            analysis_steps=[
+                f'Extracted all Secondary apps for each entity from {RISKS_FILE}',
+                f'Extracted all Key-tagged apps for each entity from {KPA_FILE}',
+                'Compared Secondary apps to Key apps - identified Secondary apps NOT tagged as Key',
+                'Flagged as methodology violation (documented rule requires Secondary → Key)',
+                f'Retrieved current IT and IS risk from {RISKS_FILE}',
+                f'Retrieved ARA scores from {ARA_FILE} for Secondary not Key apps',
+                'Compared ARA scores of untagged apps to CURRENT system risk',
+                'Flagged "Possibly Understated" where untagged apps have higher risk than current',
+                'Flagged "Appears Correct" where untagged apps have same/lower risk'
+            ],
+            output_interpretation={
+                'Secondary Apps Not Key': 'Apps mapped as Secondary but NOT tagged as Key - violates documented methodology',
+                'Methodology Rule': 'Secondary apps should be identified as a key application in at least one KPA',
+                'Severity': 'HIGH - Direct methodology violation + potential risk understatement',
+                'Possibly Understated': f'{len(secondary_higher_either)} entities where untagged apps have higher risk',
+                'Appears Correct': f'{len(secondary_issue) - len(secondary_higher_either)} entities where untagged apps have same/lower risk',
+                'IT Specific': f'{len(secondary_higher_it)} entities would have higher IT risk',
+                'IS Specific': f'{len(secondary_higher_is)} entities would have higher IS risk',
+                'Next Steps': 'Systematic tagging of Secondary apps as Key per methodology'
+            }
+        )
+        methodology_obs3.to_excel(writer, sheet_name='Methodology', index=False)
+        
+        # ========== SUMMARY TAB ==========
         obs3_summary = pd.DataFrame([
             {'Metric': 'OBSERVATION 3: SECONDARY APPS NOT TAGGED AS KEY', 'Value': ''},
             {'Metric': '', 'Value': ''},
@@ -906,21 +1223,23 @@ if len(secondary_issue) > 0:
             {'Metric': 'Higher IS Risk than current', 'Value': len(secondary_higher_is)},
             {'Metric': 'Higher risk (either): POSSIBLY UNDERSTATED', 'Value': len(secondary_higher_either)},
             {'Metric': 'Same/lower risk: Appears correct', 'Value': len(secondary_issue) - len(secondary_higher_either)},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'See "Methodology" tab', 'Value': 'For complete analysis documentation'},
         ])
         obs3_summary.to_excel(writer, sheet_name='Summary', index=False)
         
-        # Tab 2: All entities
+        # ========== ALL SECONDARY NOT KEY TAB ==========
         secondary_export = secondary_issue.sort_values('# Secondary Apps Not Key', ascending=False)
         secondary_export.to_excel(writer, sheet_name='All Secondary Not Key', index=False)
         
-        # Tab 3: Possibly Understated (ARA-validated)
+        # ========== POSSIBLY UNDERSTATED TAB ==========
         secondary_understated = secondary_higher_either.sort_values('# Secondary Apps Not Key', ascending=False)
         secondary_understated.to_excel(writer, sheet_name='Possibly Understated (ARA)', index=False)
         
-        # Tab 4: No Risk (confirmed understated)
+        # ========== NO RISK TAB ==========
         secondary_no_risk.to_excel(writer, sheet_name='No Risk (Confirmed)', index=False)
         
-        # Tab 5: By Team and Leader
+        # ========== BY TEAM AND LEADER TAB ==========
         if RISKS_CORE_TEAM_ACTUAL and RISKS_AUDIT_LEADER_ACTUAL:
             team_leader_dist = secondary_issue.groupby(['Core Audit Team', 'Audit Leader']).agg({
                 'Audit Entity ID': 'count',
@@ -951,7 +1270,54 @@ if len(secondary_issue) > 0:
 
 if len(all_auto_fail) > 0:
     with pd.ExcelWriter(OUTPUT_OBSERVATION_4, engine='openpyxl') as writer:
-        # Tab 1: Summary
+        
+        # ========== METHODOLOGY TAB ==========
+        methodology_obs4 = create_methodology_tab(
+            observation_number='4',
+            observation_name='Automation Failures',
+            what_was_reviewed=[
+                f'All {len(summary_df)} audit entities',
+                'Entities with Primary Key apps (apps mapped as Primary AND tagged as Key)',
+                'Entities with Secondary Key apps (apps mapped as Secondary AND tagged as Key)',
+                f'Current IT and IS risk applicability status from {RISKS_FILE}',
+                'Expected behavior: Key apps should automatically populate IT/IS risk'
+            ],
+            data_sources={
+                'Source File 1: Audit Entity Risks': {
+                    'File Name': methodology_doc['risks_file'],
+                    'Records': methodology_doc['total_entities_analyzed'],
+                    'Key Columns Used': f'{RISKS_AE_ID_COL}, {RISKS_IT_COL}, {RISKS_IS_COL}, {RISKS_PRIMARY_APPS_COL}, {RISKS_SECONDARY_APPS_COL}',
+                    'Purpose': 'Source of current risk status and app mappings'
+                },
+                'Source File 2: KPA Tagging': {
+                    'File Name': methodology_doc['kpa_file'],
+                    'Records': len(kpa_df),
+                    'Key Columns Used': f'{KPA_AE_ID_COL}, {KPA_KEY_APPS_COL}',
+                    'Purpose': 'Identify which apps are tagged as Key'
+                }
+            },
+            analysis_steps=[
+                'Identified entities with Primary Key apps (Primary mapped AND Key tagged)',
+                'Identified entities with Secondary Key apps (Secondary mapped AND Key tagged)',
+                f'Retrieved current IT/IS risk status from {RISKS_FILE}',
+                'Risk values considered "applicable": Critical, High, Medium, Low',
+                'Risk values considered "not applicable": N/A, blank, or any other value',
+                'Flagged entities with Key apps but NO IT/IS risk as automation failures',
+                'Separated into Primary Key failures and Secondary Key failures'
+            ],
+            output_interpretation={
+                'Automation Failure': 'Key apps exist but IT/IS risk NOT populated',
+                'Expected Behavior': 'When apps are tagged as Key, system should auto-populate risk from ARA scores',
+                'Primary Key Failures': f'{len(primary_auto_fail)} entities',
+                'Secondary Key Failures': f'{len(secondary_auto_fail)} entities',
+                'Total Entities': f'{len(all_auto_fail)} entities',
+                'Why High Priority': 'Risk should exist but is missing - automation not working as designed',
+                'Next Steps': 'Investigate with IT Applications team - check for timing issues, manual overrides, or system bugs'
+            }
+        )
+        methodology_obs4.to_excel(writer, sheet_name='Methodology', index=False)
+        
+        # ========== SUMMARY TAB ==========
         obs4_summary = pd.DataFrame([
             {'Metric': 'OBSERVATION 4: AUTOMATION FAILURES', 'Value': ''},
             {'Metric': '', 'Value': ''},
@@ -966,22 +1332,24 @@ if len(all_auto_fail) > 0:
             {'Metric': 'Total Secondary Key apps affected', 'Value': int(secondary_auto_fail['Secondary Key Apps'].sum()) if len(secondary_auto_fail) > 0 else 0},
             {'Metric': '', 'Value': ''},
             {'Metric': 'Impact', 'Value': 'Risk should be populated but is not'},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'See "Methodology" tab', 'Value': 'For complete analysis documentation'},
         ])
         obs4_summary.to_excel(writer, sheet_name='Summary', index=False)
         
-        # Tab 2: All automation failures
+        # ========== ALL AUTOMATION FAILURES TAB ==========
         all_auto_fail_sorted = all_auto_fail.sort_values(['Primary Key Apps', 'Secondary Key Apps'], ascending=False)
         all_auto_fail_sorted.to_excel(writer, sheet_name='All Automation Failures', index=False)
         
-        # Tab 3: Primary Key failures (if any)
+        # ========== PRIMARY KEY FAILURES TAB ==========
         if len(primary_auto_fail) > 0:
             primary_auto_fail.to_excel(writer, sheet_name='Primary Key Failures', index=False)
         
-        # Tab 4: Secondary Key failures (if any)
+        # ========== SECONDARY KEY FAILURES TAB ==========
         if len(secondary_auto_fail) > 0:
             secondary_auto_fail.to_excel(writer, sheet_name='Secondary Key Failures', index=False)
         
-        # Tab 5: By Team and Leader
+        # ========== BY TEAM AND LEADER TAB ==========
         if RISKS_CORE_TEAM_ACTUAL and RISKS_AUDIT_LEADER_ACTUAL:
             team_leader_dist = all_auto_fail.groupby(['Core Audit Team', 'Audit Leader']).agg({
                 'Audit Entity ID': 'count',
@@ -1007,30 +1375,182 @@ if len(all_auto_fail) > 0:
 # EXPORT EXECUTIVE SUMMARY
 # =============================================================================
 
+# Calculate overall metrics for executive summary
+if len(primary_issue) > 0:
+    primary_higher_either = len(primary_issue[
+        (primary_issue['Primary Not Key: Higher than Current IT'] == True) |
+        (primary_issue['Primary Not Key: Higher than Current IS'] == True)
+    ])
+else:
+    primary_higher_either = 0
+
+if len(secondary_issue) > 0:
+    secondary_higher_either = len(secondary_issue[
+        (secondary_issue['Secondary Not Key: Higher than Current IT'] == True) |
+        (secondary_issue['Secondary Not Key: Higher than Current IS'] == True)
+    ])
+else:
+    secondary_higher_either = 0
+
 with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
-    # Calculate overall metrics
-    if len(primary_issue) > 0:
-        primary_higher_either = len(primary_issue[
-            (primary_issue['Primary Not Key: Higher than Current IT'] == True) |
-            (primary_issue['Primary Not Key: Higher than Current IS'] == True)
-        ])
-    else:
-        primary_higher_either = 0
     
-    if len(secondary_issue) > 0:
-        secondary_higher_either = len(secondary_issue[
-            (secondary_issue['Secondary Not Key: Higher than Current IT'] == True) |
-            (secondary_issue['Secondary Not Key: Higher than Current IS'] == True)
-        ])
-    else:
-        secondary_higher_either = 0
+    # ========== METHODOLOGY TAB (FIRST) ==========
+    exec_methodology = pd.DataFrame([
+        {'Section': 'IT/IS RISK APPLICABILITY ANALYSIS', 'Detail': ''},
+        {'Section': 'OVERALL METHODOLOGY DOCUMENTATION', 'Detail': ''},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'Analysis Date', 'Detail': methodology_doc['analysis_date']},
+        {'Section': 'Analyst', 'Detail': '[Your Name]'},
+        {'Section': 'Scope', 'Detail': f"{methodology_doc['total_entities_analyzed']} audit entities"},
+        {'Section': '', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+        {'Section': 'OBJECTIVE', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'Primary Objective', 'Detail': 'Validate accuracy of IT/IS risk ratings across audit universe'},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'Specific Questions', 'Detail': ''},
+        {'Section': '  1.', 'Detail': 'Are the correct applications being used to calculate risk?'},
+        {'Section': '  2.', 'Detail': 'Are all relevant applications tagged as "Key" per methodology?'},
+        {'Section': '  3.', 'Detail': 'Do current risk ratings reflect actual application risk levels (per ARA)?'},
+        {'Section': '  4.', 'Detail': 'Is the automation working as designed?'},
+        {'Section': '', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+        {'Section': 'DATA SOURCES - ALL OBSERVATIONS', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'File 1: Audit Entity Risks', 'Detail': ''},
+        {'Section': '  File Name', 'Detail': methodology_doc['risks_file']},
+        {'Section': '  Records', 'Detail': methodology_doc['total_entities_analyzed']},
+        {'Section': '  Purpose', 'Detail': 'Master list of entities, risk ratings, and app mappings'},
+        {'Section': '  Key Columns', 'Detail': f'{RISKS_AE_ID_COL}, {RISKS_IT_COL}, {RISKS_IS_COL}'},
+        {'Section': '  Key Columns', 'Detail': f'{RISKS_PRIMARY_APPS_COL}, {RISKS_SECONDARY_APPS_COL}'},
+        {'Section': '  Key Columns', 'Detail': f'{RISKS_CORE_TEAM_COL}, {RISKS_AUDIT_LEADER_COL}'},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'File 2: KPA Tagging', 'Detail': ''},
+        {'Section': '  File Name', 'Detail': methodology_doc['kpa_file']},
+        {'Section': '  Records', 'Detail': len(kpa_df)},
+        {'Section': '  Purpose', 'Detail': 'Applications tagged as "Key" in KPAs per entity'},
+        {'Section': '  Key Columns', 'Detail': f'{KPA_AE_ID_COL}, {KPA_KEY_APPS_COL}'},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'File 3: ARA Scores', 'Detail': ''},
+        {'Section': '  File Name', 'Detail': methodology_doc['ara_file']},
+        {'Section': '  Records', 'Detail': methodology_doc['total_ara_records']},
+        {'Section': '  Records with Scores', 'Detail': methodology_doc['ara_records_with_scores']},
+        {'Section': '  Purpose', 'Detail': 'Risk scores (Availability, Integrity, Confidentiality) per app'},
+        {'Section': '  Key Columns', 'Detail': f'{ARA_APP_ID_COL}, {ARA_AVAILABILITY_COL}'},
+        {'Section': '  Key Columns', 'Detail': f'{ARA_INTEGRITY_COL}, {ARA_CONFIDENTIALITY_COL}'},
+        {'Section': '', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+        {'Section': 'ANALYSIS APPROACH', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'Step 1: Data Integration', 'Detail': 'Combined all three data sources by entity ID and app ID'},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'Step 2: Issue Identification', 'Detail': 'Identified four categories of issues:'},
+        {'Section': '  Observation 1', 'Detail': 'Ghost Apps - apps in KPAs not mapped to entity'},
+        {'Section': '  Observation 2', 'Detail': 'Primary apps not tagged as Key'},
+        {'Section': '  Observation 3', 'Detail': 'Secondary apps not tagged as Key (methodology violation)'},
+        {'Section': '  Observation 4', 'Detail': 'Automation failures - Key apps but no risk'},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'Step 3: ARA Validation', 'Detail': 'For each issue, validated impact using ARA scores:'},
+        {'Section': '  IT Risk Calculation', 'Detail': 'max(Availability, Integrity) across apps'},
+        {'Section': '  IS Risk Calculation', 'Detail': 'max(Confidentiality) across apps'},
+        {'Section': '  Comparison Logic', 'Detail': 'Compared to CURRENT system risk (not expected)'},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'Step 4: Impact Assessment', 'Detail': 'Categorized findings:'},
+        {'Section': '  Ghost Apps', 'Detail': 'POSSIBLY MISSTATED (wrong apps - cannot validate without correct apps)'},
+        {'Section': '  Apps Not Key', 'Detail': 'POSSIBLY UNDERSTATED (when untagged apps have higher risk than current)'},
+        {'Section': '  Apps Not Key', 'Detail': 'APPEARS CORRECT (when untagged apps have same/lower risk)'},
+        {'Section': '', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+        {'Section': 'KEY ASSUMPTIONS AND LIMITATIONS', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'Assumption 1', 'Detail': 'ARA scores are current and accurate'},
+        {'Section': 'Assumption 2', 'Detail': 'Application mappings in source file are correct'},
+        {'Section': 'Assumption 3', 'Detail': 'Risk values Critical/High/Medium/Low indicate applicable risk'},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'Limitation 1', 'Detail': 'Cannot determine which apps SHOULD be Key without business context'},
+        {'Section': 'Limitation 2', 'Detail': 'Cannot identify correct apps for ghost apps without investigation'},
+        {'Section': 'Limitation 3', 'Detail': 'Comparison is against CURRENT system risk (which may itself be wrong)'},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'Language Used', 'Detail': '"Possibly misstated" - acknowledges lack of full context'},
+        {'Section': '', 'Detail': '"Possibly understated" - ARA shows higher risk, but may have valid reasons'},
+        {'Section': '', 'Detail': '"Appears correct" - based on current data, no indication of issue'},
+        {'Section': '', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+        {'Section': 'OBSERVATIONS SUMMARY', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'Observation 1: Ghost Applications', 'Detail': ''},
+        {'Section': '  Entities', 'Detail': len(ghost_entities) if len(ghost_entities) > 0 else 0},
+        {'Section': '  Assessment', 'Detail': 'All: Possibly Misstated'},
+        {'Section': '  Detail File', 'Detail': OUTPUT_OBSERVATION_1 if len(ghost_entities) > 0 else 'N/A'},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'Observation 2: Primary Apps Not Key', 'Detail': ''},
+        {'Section': '  Entities', 'Detail': len(primary_issue) if len(primary_issue) > 0 else 0},
+        {'Section': '  Possibly Understated', 'Detail': primary_higher_either},
+        {'Section': '  Appears Correct', 'Detail': len(primary_issue) - primary_higher_either if len(primary_issue) > 0 else 0},
+        {'Section': '  Detail File', 'Detail': OUTPUT_OBSERVATION_2 if len(primary_issue) > 0 else 'N/A'},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'Observation 3: Secondary Apps Not Key', 'Detail': ''},
+        {'Section': '  Entities', 'Detail': len(secondary_issue) if len(secondary_issue) > 0 else 0},
+        {'Section': '  Possibly Understated', 'Detail': secondary_higher_either},
+        {'Section': '  Appears Correct', 'Detail': len(secondary_issue) - secondary_higher_either if len(secondary_issue) > 0 else 0},
+        {'Section': '  Detail File', 'Detail': OUTPUT_OBSERVATION_3 if len(secondary_issue) > 0 else 'N/A'},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'Observation 4: Automation Failures', 'Detail': ''},
+        {'Section': '  Entities', 'Detail': len(all_auto_fail) if len(all_auto_fail) > 0 else 0},
+        {'Section': '  Assessment', 'Detail': 'Risk missing when it should exist'},
+        {'Section': '  Detail File', 'Detail': OUTPUT_OBSERVATION_4 if len(all_auto_fail) > 0 else 'N/A'},
+        {'Section': '', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+        {'Section': 'REPERFORMANCE INSTRUCTIONS', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'To reperform this entire analysis:', 'Detail': ''},
+        {'Section': '', 'Detail': ''},
+        {'Section': '1. Obtain Source Files', 'Detail': ''},
+        {'Section': '   •', 'Detail': methodology_doc['risks_file']},
+        {'Section': '   •', 'Detail': methodology_doc['kpa_file']},
+        {'Section': '   •', 'Detail': methodology_doc['ara_file']},
+        {'Section': '', 'Detail': ''},
+        {'Section': '2. Verify File Structure', 'Detail': ''},
+        {'Section': '   • Ensure column names match configuration in script', 'Detail': ''},
+        {'Section': '   • Verify data types (IDs as text, risks as text)', 'Detail': ''},
+        {'Section': '   • Check for expected number of records', 'Detail': ''},
+        {'Section': '', 'Detail': ''},
+        {'Section': '3. Run Python Script', 'Detail': ''},
+        {'Section': '   • Script name', 'Detail': '[To be filled in]'},
+        {'Section': '   • Script version', 'Detail': 'v1.0 - ' + methodology_doc['analysis_date']},
+        {'Section': '   • Python version', 'Detail': '3.7 or higher'},
+        {'Section': '   • Required libraries', 'Detail': 'pandas, openpyxl'},
+        {'Section': '', 'Detail': ''},
+        {'Section': '4. Review Outputs', 'Detail': ''},
+        {'Section': '   •', 'Detail': OUTPUT_EXECUTIVE_SUMMARY + ' (this file)'},
+        {'Section': '   •', 'Detail': OUTPUT_OBSERVATION_1 + ' (if ghost apps found)'},
+        {'Section': '   •', 'Detail': OUTPUT_OBSERVATION_2 + ' (if Primary not Key found)'},
+        {'Section': '   •', 'Detail': OUTPUT_OBSERVATION_3 + ' (if Secondary not Key found)'},
+        {'Section': '   •', 'Detail': OUTPUT_OBSERVATION_4 + ' (if automation failures found)'},
+        {'Section': '   •', 'Detail': OUTPUT_FULL_ANALYSIS + ' (complete dataset)'},
+        {'Section': '', 'Detail': ''},
+        {'Section': '5. Compare Results', 'Detail': ''},
+        {'Section': '   • Check entity counts match', 'Detail': ''},
+        {'Section': '   • Verify issue counts match', 'Detail': ''},
+        {'Section': '   • Spot-check specific entities', 'Detail': ''},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'Script Logic', 'Detail': 'See individual Observation files for detailed step-by-step methodology'},
+    ])
+    exec_methodology.to_excel(writer, sheet_name='Methodology', index=False)
     
-    # Tab 1: Overall Summary
+    # ========== EXECUTIVE SUMMARY TAB ==========
     exec_summary = pd.DataFrame([
         {'Metric': 'IT/IS RISK APPLICABILITY ANALYSIS', 'Value': '', 'Details': ''},
         {'Metric': 'EXECUTIVE SUMMARY (ARA-Validated)', 'Value': '', 'Details': ''},
         {'Metric': 'Comparison: Apps vs CURRENT SYSTEM RISK', 'Value': '', 'Details': ''},
         {'Metric': '', 'Value': '', 'Details': ''},
+        {'Metric': 'Analysis Date', 'Value': methodology_doc['analysis_date'], 'Details': ''},
         {'Metric': 'Scope', 'Value': len(summary_df), 'Details': 'audit entities analyzed'},
         {'Metric': '', 'Value': '', 'Details': ''},
         {'Metric': 'OBSERVATION 1: Ghost Applications', 'Value': '', 'Details': 'CRITICAL'},
@@ -1060,10 +1580,12 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
         {'Metric': '└─ Possibly understated (Primary not Key)', 'Value': primary_higher_either, 'Details': 'entities'},
         {'Metric': '└─ Possibly understated (Secondary not Key)', 'Value': secondary_higher_either, 'Details': 'entities'},
         {'Metric': 'TOTAL POSSIBLY MISSTATED RISK', 'Value': possibly_misstated_either, 'Details': f"{possibly_misstated_either/len(summary_df)*100:.1f}%"},
+        {'Metric': '', 'Value': '', 'Details': ''},
+        {'Metric': 'See "Methodology" tab', 'Value': 'For complete analysis documentation', 'Details': ''},
     ])
     exec_summary.to_excel(writer, sheet_name='Executive Summary', index=False)
     
-    # Tab 2: Observation Comparison
+    # ========== OBSERVATION COMPARISON TAB ==========
     obs_comparison = pd.DataFrame([
         {
             'Observation': '1 - Ghost Apps',
@@ -1104,9 +1626,8 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
     ])
     obs_comparison.to_excel(writer, sheet_name='Observation Comparison', index=False)
     
-    # Tab 3: Team and Leader Analysis
+    # ========== BY TEAM AND LEADER TAB ==========
     if RISKS_CORE_TEAM_ACTUAL and RISKS_AUDIT_LEADER_ACTUAL:
-        # Count issues by team and leader across all observations
         team_leader_summary = summary_df.groupby(['Core Audit Team', 'Audit Leader']).agg({
             'Audit Entity ID': 'count',
             'CRITICAL: Ghost Apps': 'sum',
@@ -1137,7 +1658,6 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
             'Secondary: Higher IS (ARA)'
         ]
         
-        # Add total issues column
         team_leader_summary['Total Issues'] = (
             team_leader_summary['Ghost Apps'] +
             team_leader_summary['Primary Not Key'] +
@@ -1146,7 +1666,6 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
             team_leader_summary['Secondary Auto Fail']
         )
         
-        # Add ARA-validated possibly misstated column
         team_leader_summary['ARA: Possibly Misstated'] = (
             team_leader_summary['Ghost: Possibly Misstated'] +
             team_leader_summary['Primary: Higher IT (ARA)'] +
@@ -1155,16 +1674,13 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
             team_leader_summary['Secondary: Higher IS (ARA)']
         )
         
-        # Calculate percentages
         team_leader_summary['% Entities With Issues'] = round((team_leader_summary['Total Issues'] / team_leader_summary['Total Entities']) * 100, 1)
         
-        # Sort by team, then by possibly misstated count
         team_leader_summary = team_leader_summary.sort_values(['Core Audit Team', 'ARA: Possibly Misstated'], ascending=[True, False])
         
         team_leader_summary.to_excel(writer, sheet_name='By Team and Leader', index=False)
     
     elif RISKS_CORE_TEAM_ACTUAL:
-        # Count issues by team only
         team_summary = summary_df.groupby('Core Audit Team').agg({
             'Audit Entity ID': 'count',
             'CRITICAL: Ghost Apps': 'sum',
@@ -1194,7 +1710,6 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
             'Secondary: Higher IS (ARA)'
         ]
         
-        # Add total issues column
         team_summary['Total Issues'] = (
             team_summary['Ghost Apps'] +
             team_summary['Primary Not Key'] +
@@ -1203,7 +1718,6 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
             team_summary['Secondary Auto Fail']
         )
         
-        # Add ARA-validated possibly misstated column
         team_summary['ARA: Possibly Misstated'] = (
             team_summary['Ghost: Possibly Misstated'] +
             team_summary['Primary: Higher IT (ARA)'] +
@@ -1212,10 +1726,8 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
             team_summary['Secondary: Higher IS (ARA)']
         )
         
-        # Calculate percentages
         team_summary['% Entities With Issues'] = round((team_summary['Total Issues'] / team_summary['Total Entities']) * 100, 1)
         
-        # Sort by possibly misstated count
         team_summary = team_summary.sort_values('ARA: Possibly Misstated', ascending=False)
         
         team_summary.to_excel(writer, sheet_name='By Team', index=False)
@@ -1305,31 +1817,41 @@ print("\n" + "="*70)
 print("ANALYSIS COMPLETE")
 print("="*70)
 print(f"\n📊 Files Created:")
-print(f"   {OUTPUT_EXECUTIVE_SUMMARY}")
+print(f"   {OUTPUT_EXECUTIVE_SUMMARY} ← Start here (includes Methodology)")
 if len(ghost_entities) > 0:
-    print(f"   {OUTPUT_OBSERVATION_1}")
+    print(f"   {OUTPUT_OBSERVATION_1} (Methodology tab included)")
 if len(primary_issue) > 0:
-    print(f"   {OUTPUT_OBSERVATION_2}")
+    print(f"   {OUTPUT_OBSERVATION_2} (Methodology tab included)")
 if len(secondary_issue) > 0:
-    print(f"   {OUTPUT_OBSERVATION_3}")
+    print(f"   {OUTPUT_OBSERVATION_3} (Methodology tab included)")
 if len(all_auto_fail) > 0:
-    print(f"   {OUTPUT_OBSERVATION_4}")
-print(f"   {OUTPUT_FULL_ANALYSIS}")
+    print(f"   {OUTPUT_OBSERVATION_4} (Methodology tab included)")
+print(f"   {OUTPUT_FULL_ANALYSIS} (Complete dataset)")
 
 print(f"\n📁 Each observation file contains:")
-print(f"   - Summary tab (metrics with ARA validation)")
-print(f"   - All data tab (complete list)")
-print(f"   - ARA-validated impact tabs (possibly understated)")
-print(f"   - Filtered views (samples, high priority)")
+print(f"   - Methodology tab (FIRST - documents what was reviewed)")
+print(f"   - Summary tab (key metrics)")
+print(f"   - Analysis tabs (all data, ARA validation, samples)")
 if RISKS_CORE_TEAM_ACTUAL and RISKS_AUDIT_LEADER_ACTUAL:
     print(f"   - By Team and Leader tab (accountability)")
 elif RISKS_CORE_TEAM_ACTUAL:
     print(f"   - By Team tab (distribution)")
+
+print(f"\n✓ METHODOLOGY DOCUMENTED")
+print(f"   All files include complete reperformance instructions")
+print(f"   Data sources, analysis steps, and interpretation documented")
+print(f"   Audit-ready workpaper trail")
 
 print(f"\n✓ ARA VALIDATION COMPLETE")
 print(f"   Comparison: Apps vs CURRENT SYSTEM RISK")
 print(f"   Ghost apps: Possibly misstated (unknown correct apps)")
 print(f"   Untagged apps: Possibly understated when higher than current")
 print(f"   {possibly_misstated_either} entities with possibly misstated risk")
+print(f"   IT and IS tracked separately throughout")
+
+print(f"\n📋 TO REPERFORM THIS ANALYSIS:")
+print(f"   1. See 'Methodology' tab in {OUTPUT_EXECUTIVE_SUMMARY}")
+print(f"   2. Follow documented steps with source files")
+print(f"   3. Compare results to these outputs")
 
 print("\n" + "="*70)
