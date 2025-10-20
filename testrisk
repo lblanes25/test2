@@ -8,10 +8,12 @@ import re
 # Input file names
 RISKS_FILE = "audit_entity_risks.xlsx"
 KPA_FILE = "kpa_tagging.xlsx"
+ARA_FILE = "all_applications.xlsx"
 
 # Sheet names
 RISKS_SHEET = 0
 KPA_SHEET = 0
+ARA_SHEET = 0
 
 # Column names in RISKS file (case-insensitive matching will be applied)
 RISKS_AE_ID_COL = "Audit Entity ID"
@@ -27,6 +29,12 @@ KPA_AE_ID_COL = "Audit Entity ID"
 KPA_ID_COL = "KPA ID"
 KPA_KEY_APPS_COL = "KEY PRIMARY & SECONDARY IT applications"
 
+# Column names in ARA file
+ARA_APP_ID_COL = "Application Risk Assessment(ARA) Records (Centall Applications)"
+ARA_AVAILABILITY_COL = "Availability Risk"
+ARA_INTEGRITY_COL = "Integrity Risk"
+ARA_CONFIDENTIALITY_COL = "Confidentiality Risk"
+
 # Output file names - ORGANIZED BY OBSERVATION
 OUTPUT_OBSERVATION_1 = "Observation1_GhostApps.xlsx"
 OUTPUT_OBSERVATION_2 = "Observation2_PrimaryNotKey.xlsx"
@@ -38,6 +46,17 @@ OUTPUT_FULL_ANALYSIS = "SourceData_FullAnalysis.xlsx"
 # Risk values that indicate the risk IS applicable
 RISK_APPLICABLE_VALUES = ['Critical', 'High', 'Medium', 'Low']
 
+# Risk scale for comparison (in order of severity)
+RISK_SCALE = {
+    'Critical': 4,
+    'High': 3,
+    'Medium': 2,
+    'Low': 1,
+    'N/A': 0,
+    None: 0,
+    '': 0
+}
+
 # =============================================================================
 # LOAD DATA
 # =============================================================================
@@ -48,9 +67,11 @@ print("="*70)
 
 risks_df = pd.read_excel(RISKS_FILE, sheet_name=RISKS_SHEET)
 kpa_df = pd.read_excel(KPA_FILE, sheet_name=KPA_SHEET)
+ara_df = pd.read_excel(ARA_FILE, sheet_name=ARA_SHEET)
 
 print(f"✓ Loaded {len(risks_df)} audit entities from risks file")
 print(f"✓ Loaded {len(kpa_df)} KPA records")
+print(f"✓ Loaded {len(ara_df)} ARA records")
 print()
 
 # =============================================================================
@@ -87,6 +108,11 @@ KPA_AE_ID_ACTUAL = find_column(kpa_df, KPA_AE_ID_COL)
 KPA_ID_ACTUAL = find_column(kpa_df, KPA_ID_COL)
 KPA_KEY_APPS_ACTUAL = find_column(kpa_df, KPA_KEY_APPS_COL)
 
+ARA_APP_ID_ACTUAL = find_column(ara_df, ARA_APP_ID_COL)
+ARA_AVAILABILITY_ACTUAL = find_column(ara_df, ARA_AVAILABILITY_COL)
+ARA_INTEGRITY_ACTUAL = find_column(ara_df, ARA_INTEGRITY_COL)
+ARA_CONFIDENTIALITY_ACTUAL = find_column(ara_df, ARA_CONFIDENTIALITY_COL)
+
 print("="*70)
 print("COLUMN MAPPING")
 print("="*70)
@@ -98,6 +124,30 @@ if RISKS_CORE_TEAM_ACTUAL:
 if RISKS_AUDIT_LEADER_ACTUAL:
     print(f"✓ Risks file - Audit Leader: '{RISKS_AUDIT_LEADER_ACTUAL}'")
 print(f"✓ KPA file - AE ID: '{KPA_AE_ID_ACTUAL}'")
+print(f"✓ ARA file - App ID: '{ARA_APP_ID_ACTUAL}'")
+print(f"✓ ARA file - Availability: '{ARA_AVAILABILITY_ACTUAL}'")
+print(f"✓ ARA file - Integrity: '{ARA_INTEGRITY_ACTUAL}'")
+print(f"✓ ARA file - Confidentiality: '{ARA_CONFIDENTIALITY_ACTUAL}'")
+print()
+
+# =============================================================================
+# CREATE ARA LOOKUP DICTIONARY
+# =============================================================================
+
+print("="*70)
+print("BUILDING ARA LOOKUP")
+print("="*70)
+
+ara_lookup = {}
+for _, row in ara_df.iterrows():
+    app_id = str(row[ARA_APP_ID_ACTUAL]).strip()
+    ara_lookup[app_id] = {
+        'availability': row[ARA_AVAILABILITY_ACTUAL] if pd.notna(row[ARA_AVAILABILITY_ACTUAL]) else 'N/A',
+        'integrity': row[ARA_INTEGRITY_ACTUAL] if pd.notna(row[ARA_INTEGRITY_ACTUAL]) else 'N/A',
+        'confidentiality': row[ARA_CONFIDENTIALITY_ACTUAL] if pd.notna(row[ARA_CONFIDENTIALITY_ACTUAL]) else 'N/A'
+    }
+
+print(f"✓ Created ARA lookup for {len(ara_lookup)} applications")
 print()
 
 # =============================================================================
@@ -113,6 +163,91 @@ def split_ids(value):
         return []
     ids = re.split(r'[\n,;]+', str(value).strip())
     return [x.strip() for x in ids if x.strip()]
+
+# =============================================================================
+# HELPER FUNCTIONS: ARA RISK CALCULATIONS
+# =============================================================================
+
+def get_risk_level(risk_value):
+    """Convert risk value to numeric level for comparison"""
+    if pd.isna(risk_value):
+        return 0
+    return RISK_SCALE.get(str(risk_value).strip(), 0)
+
+def risk_to_string(risk_level):
+    """Convert numeric risk level back to string"""
+    for key, value in RISK_SCALE.items():
+        if value == risk_level and key not in ['N/A', None, '']:
+            return key
+    return 'N/A'
+
+def calculate_it_risk_from_apps(app_ids, ara_lookup):
+    """
+    Calculate IT risk from list of apps using ARA scores.
+    IT Risk = max(Availability, Integrity) across all apps.
+    Returns tuple: (risk_level_numeric, risk_string, detail_dict)
+    """
+    if not app_ids:
+        return 0, 'N/A', {}
+    
+    max_risk = 0
+    detail = {'apps_evaluated': [], 'max_app': None, 'max_score_type': None}
+    
+    for app_id in app_ids:
+        if not app_id or app_id not in ara_lookup:
+            continue
+            
+        ara = ara_lookup[app_id]
+        avail_level = get_risk_level(ara['availability'])
+        integ_level = get_risk_level(ara['integrity'])
+        
+        # IT Risk is the HIGHER of availability or integrity
+        app_it_risk = max(avail_level, integ_level)
+        
+        detail['apps_evaluated'].append({
+            'app_id': app_id,
+            'availability': ara['availability'],
+            'integrity': ara['integrity'],
+            'it_risk': risk_to_string(app_it_risk)
+        })
+        
+        if app_it_risk > max_risk:
+            max_risk = app_it_risk
+            detail['max_app'] = app_id
+            detail['max_score_type'] = 'Availability' if avail_level > integ_level else 'Integrity'
+    
+    return max_risk, risk_to_string(max_risk), detail
+
+def calculate_is_risk_from_apps(app_ids, ara_lookup):
+    """
+    Calculate IS risk from list of apps using ARA scores.
+    IS Risk = max(Confidentiality) across all apps.
+    Returns tuple: (risk_level_numeric, risk_string, detail_dict)
+    """
+    if not app_ids:
+        return 0, 'N/A', {}
+    
+    max_risk = 0
+    detail = {'apps_evaluated': [], 'max_app': None}
+    
+    for app_id in app_ids:
+        if not app_id or app_id not in ara_lookup:
+            continue
+            
+        ara = ara_lookup[app_id]
+        confid_level = get_risk_level(ara['confidentiality'])
+        
+        detail['apps_evaluated'].append({
+            'app_id': app_id,
+            'confidentiality': ara['confidentiality'],
+            'is_risk': risk_to_string(confid_level)
+        })
+        
+        if confid_level > max_risk:
+            max_risk = confid_level
+            detail['max_app'] = app_id
+    
+    return max_risk, risk_to_string(max_risk), detail
 
 # =============================================================================
 # EXTRACT PRIMARY AND SECONDARY APPS PER AUDIT ENTITY
@@ -149,12 +284,14 @@ kpa_key_map = (
 )
 
 # =============================================================================
-# MAIN ANALYSIS: BUILD COMPREHENSIVE DATASET
+# MAIN ANALYSIS: BUILD COMPREHENSIVE DATASET WITH ARA VALIDATION
 # =============================================================================
 
 print("="*70)
-print("ANALYZING DATA")
+print("ANALYZING DATA WITH ARA VALIDATION")
 print("="*70)
+print("Comparison Logic: Apps vs CURRENT SYSTEM RISK")
+print()
 
 rows = []
 
@@ -201,15 +338,86 @@ for ae_id in risks_df[RISKS_AE_ID_ACTUAL]:
     pct_primary_not_key = round((num_primary_not_key / total_primary) * 100, 1) if total_primary else 0
     pct_secondary_not_key = round((num_secondary_not_key / total_secondary) * 100, 1) if total_secondary else 0
     
-    # Pull risk applicability
+    # Pull CURRENT risk from system
     risks_row = risks_df[risks_df[RISKS_AE_ID_ACTUAL] == ae_id]
     
     if len(risks_row) > 0:
-        it_risk = risks_row[RISKS_IT_ACTUAL].values[0]
-        is_risk = risks_row[RISKS_IS_ACTUAL].values[0]
+        current_it_risk = risks_row[RISKS_IT_ACTUAL].values[0]
+        current_is_risk = risks_row[RISKS_IS_ACTUAL].values[0]
     else:
-        it_risk = 'N/A'
-        is_risk = 'N/A'
+        current_it_risk = 'N/A'
+        current_is_risk = 'N/A'
+    
+    # Get numeric levels for CURRENT system risk
+    current_it_level = get_risk_level(current_it_risk)
+    current_is_level = get_risk_level(current_is_risk)
+    
+    # ========== ARA VALIDATION: COMPARE AGAINST CURRENT SYSTEM RISK ==========
+    
+    # Calculate risk from ALL mapped apps (what it COULD be if all were Key)
+    all_mapped_app_ids = list(all_mapped_apps)
+    all_apps_it_level, all_apps_it_risk, _ = calculate_it_risk_from_apps(all_mapped_app_ids, ara_lookup)
+    all_apps_is_level, all_apps_is_risk, _ = calculate_is_risk_from_apps(all_mapped_app_ids, ara_lookup)
+    
+    # Calculate risk from Key apps (including ghost apps - what system is using)
+    key_app_ids = list(key_apps_set)
+    key_apps_it_level, key_apps_it_risk, it_detail = calculate_it_risk_from_apps(key_app_ids, ara_lookup)
+    key_apps_is_level, key_apps_is_risk, is_detail = calculate_is_risk_from_apps(key_app_ids, ara_lookup)
+    
+    # Calculate risk from ghost apps alone
+    ghost_it_level = 0
+    ghost_is_level = 0
+    ghost_it_risk = 'N/A'
+    ghost_is_risk = 'N/A'
+    if ghost_apps:
+        ghost_it_level, ghost_it_risk, _ = calculate_it_risk_from_apps(ghost_apps, ara_lookup)
+        ghost_is_level, ghost_is_risk, _ = calculate_is_risk_from_apps(ghost_apps, ara_lookup)
+    
+    # Calculate risk from untagged apps
+    primary_not_key_it_level = 0
+    primary_not_key_is_level = 0
+    primary_not_key_it_risk = 'N/A'
+    primary_not_key_is_risk = 'N/A'
+    if primary_not_key:
+        primary_not_key_it_level, primary_not_key_it_risk, _ = calculate_it_risk_from_apps(primary_not_key, ara_lookup)
+        primary_not_key_is_level, primary_not_key_is_risk, _ = calculate_is_risk_from_apps(primary_not_key, ara_lookup)
+    
+    secondary_not_key_it_level = 0
+    secondary_not_key_is_level = 0
+    secondary_not_key_it_risk = 'N/A'
+    secondary_not_key_is_risk = 'N/A'
+    if secondary_not_key:
+        secondary_not_key_it_level, secondary_not_key_it_risk, _ = calculate_it_risk_from_apps(secondary_not_key, ara_lookup)
+        secondary_not_key_is_level, secondary_not_key_is_risk, _ = calculate_is_risk_from_apps(secondary_not_key, ara_lookup)
+    
+    # ========== KEY COMPARISON: Against CURRENT SYSTEM RISK ==========
+    
+    # Would risk be HIGHER than current if we included ghost apps' correct counterparts?
+    # (We can't calculate this without knowing what the correct apps are, so we note the ghost apps exist)
+    has_ghost_apps = num_ghost_apps > 0
+    
+    # Would risk be HIGHER than current if Primary not Key apps were tagged?
+    primary_would_increase_it = primary_not_key_it_level > current_it_level
+    primary_would_increase_is = primary_not_key_is_level > current_is_level
+    
+    # Would risk be HIGHER than current if Secondary not Key apps were tagged?
+    secondary_would_increase_it = secondary_not_key_it_level > current_it_level
+    secondary_would_increase_is = secondary_not_key_is_level > current_is_level
+    
+    # Would risk be HIGHER than current if ALL mapped apps were tagged?
+    all_apps_would_increase_it = all_apps_it_level > current_it_level
+    all_apps_would_increase_is = all_apps_is_level > current_is_level
+    
+    # Risk status assessment
+    if has_ghost_apps:
+        it_risk_assessment = 'Possibly Misstated (Ghost Apps)'
+        is_risk_assessment = 'Possibly Misstated (Ghost Apps)'
+    elif all_apps_would_increase_it or all_apps_would_increase_is:
+        it_risk_assessment = 'Possibly Understated' if all_apps_would_increase_it else 'Appears Correct'
+        is_risk_assessment = 'Possibly Understated' if all_apps_would_increase_is else 'Appears Correct'
+    else:
+        it_risk_assessment = 'Appears Correct'
+        is_risk_assessment = 'Appears Correct'
     
     # Build output row
     rows.append({
@@ -241,9 +449,41 @@ for ae_id in risks_df[RISKS_AE_ID_ACTUAL]:
         '% Secondary Apps Not Key': pct_secondary_not_key,
         'Secondary Not Key IDs': ','.join(secondary_not_key) if secondary_not_key else '',
         
-        # Risk status
-        'IT Risk': it_risk,
-        'IS Risk': is_risk
+        # CURRENT Risk (what's in the system NOW)
+        'Current IT Risk': current_it_risk,
+        'Current IS Risk': current_is_risk,
+        
+        # ARA ANALYSIS: What risks WOULD be from different app sets
+        'Risk from Key Apps (incl ghosts)': key_apps_it_risk,
+        'IS Risk from Key Apps (incl ghosts)': key_apps_is_risk,
+        'Risk from ALL Mapped Apps': all_apps_it_risk,
+        'IS Risk from ALL Mapped Apps': all_apps_is_risk,
+        
+        # Ghost app risk levels
+        'Ghost Apps IT Risk': ghost_it_risk,
+        'Ghost Apps IS Risk': ghost_is_risk,
+        
+        # Untagged apps risk levels
+        'Primary Not Key IT Risk': primary_not_key_it_risk,
+        'Primary Not Key IS Risk': primary_not_key_is_risk,
+        'Secondary Not Key IT Risk': secondary_not_key_it_risk,
+        'Secondary Not Key IS Risk': secondary_not_key_is_risk,
+        
+        # COMPARISON: Would apps change CURRENT risk?
+        'Primary Not Key: Higher than Current IT': primary_would_increase_it,
+        'Primary Not Key: Higher than Current IS': primary_would_increase_is,
+        'Secondary Not Key: Higher than Current IT': secondary_would_increase_it,
+        'Secondary Not Key: Higher than Current IS': secondary_would_increase_is,
+        'ALL Mapped Apps: Higher than Current IT': all_apps_would_increase_it,
+        'ALL Mapped Apps: Higher than Current IS': all_apps_would_increase_is,
+        
+        # Risk Assessment
+        'IT Risk Assessment': it_risk_assessment,
+        'IS Risk Assessment': is_risk_assessment,
+        
+        # Reference info
+        'Key App Driving IT (incl ghosts)': it_detail.get('max_app', 'N/A'),
+        'Key App Driving IS (incl ghosts)': is_detail.get('max_app', 'N/A'),
     })
 
 # =============================================================================
@@ -266,8 +506,8 @@ def is_risk_applicable(risk_value):
     return str(risk_value).strip() in RISK_APPLICABLE_VALUES
 
 # Add boolean columns
-summary_df['IT Risk Applicable'] = summary_df['IT Risk'].apply(is_risk_applicable)
-summary_df['IS Risk Applicable'] = summary_df['IS Risk'].apply(is_risk_applicable)
+summary_df['IT Risk Applicable'] = summary_df['Current IT Risk'].apply(is_risk_applicable)
+summary_df['IS Risk Applicable'] = summary_df['Current IS Risk'].apply(is_risk_applicable)
 summary_df['Any IT/IS Risk Applicable'] = summary_df['IT Risk Applicable'] | summary_df['IS Risk Applicable']
 
 # =============================================================================
@@ -290,11 +530,8 @@ summary_df['ANY ISSUE'] = (
     summary_df['HIGH: Secondary Not Key']
 )
 
-# Specific patterns for impact analysis
-summary_df['Ghost Apps + No Risk'] = (
-    (summary_df['# Ghost Apps (Key but Not Mapped)'] > 0) &
-    (~summary_df['Any IT/IS Risk Applicable'])
-)
+# Specific impact flags
+summary_df['Ghost Apps Present'] = summary_df['# Ghost Apps (Key but Not Mapped)'] > 0
 
 summary_df['Primary Not Key + No Risk'] = (
     (summary_df['# Primary Apps Not Key'] > 0) &
@@ -320,8 +557,19 @@ summary_df['Secondary Key Auto Failure'] = (
     (~summary_df['Any IT/IS Risk Applicable'])
 )
 
+# ARA-validated impact flags (compared to CURRENT risk)
+summary_df['Possibly Misstated IT Risk'] = (
+    (summary_df['IT Risk Assessment'] == 'Possibly Misstated (Ghost Apps)') |
+    (summary_df['IT Risk Assessment'] == 'Possibly Understated')
+)
+
+summary_df['Possibly Misstated IS Risk'] = (
+    (summary_df['IS Risk Assessment'] == 'Possibly Misstated (Ghost Apps)') |
+    (summary_df['IS Risk Assessment'] == 'Possibly Understated')
+)
+
 # =============================================================================
-# CONSOLE OUTPUT WITH STATISTICS
+# CONSOLE OUTPUT WITH ARA-VALIDATED STATISTICS
 # =============================================================================
 
 print("="*70)
@@ -337,10 +585,12 @@ if len(ghost_entities) > 0:
     print(f"   Entities affected: {len(ghost_entities)} ({len(ghost_entities)/len(summary_df)*100:.1f}%)")
     print(f"   Total ghost apps: {int(total_ghost_apps)}")
     print(f"   Avg per entity: {total_ghost_apps/len(ghost_entities):.1f}")
-    
-    ghost_no_risk = summary_df[summary_df['Ghost Apps + No Risk']]
-    print(f"   With NO IT/IS risk: {len(ghost_no_risk)}")
-    print(f"   With IT/IS risk (using wrong apps): {len(ghost_entities) - len(ghost_no_risk)}")
+    print(f"   ")
+    print(f"   ✓ RISK ASSESSMENT:")
+    print(f"   ALL {len(ghost_entities)} entities have POSSIBLY MISSTATED risk")
+    print(f"   (Ghost apps are wrong apps - correct apps may have different risk)")
+    print(f"   ")
+    print(f"   Impact: Cannot validate accuracy without knowing correct apps")
 else:
     print(f"✓ No ghost applications detected")
 
@@ -356,16 +606,26 @@ print()
 primary_issue = summary_df[summary_df['HIGH: Primary Not Key']]
 total_primary_not_key = summary_df['# Primary Apps Not Key'].sum()
 primary_no_risk = summary_df[summary_df['Primary Not Key + No Risk']]
-primary_have_risk = primary_issue[primary_issue['Any IT/IS Risk Applicable']]
 
 if len(primary_issue) > 0:
+    # Check how many would have HIGHER risk than CURRENT if Primary apps were Key
+    primary_higher_it = primary_issue[primary_issue['Primary Not Key: Higher than Current IT'] == True]
+    primary_higher_is = primary_issue[primary_issue['Primary Not Key: Higher than Current IS'] == True]
+    primary_higher_either = primary_issue[
+        (primary_issue['Primary Not Key: Higher than Current IT'] == True) |
+        (primary_issue['Primary Not Key: Higher than Current IS'] == True)
+    ]
+    
     print(f"⚠️  HIGH PRIORITY ISSUE")
     print(f"   Entities with Primary apps: {len(summary_df[summary_df['Total Primary Apps'] > 0])}")
     print(f"   Entities with Primary NOT Key: {len(primary_issue)} ({len(primary_issue)/len(summary_df[summary_df['Total Primary Apps'] > 0])*100:.1f}% of entities with Primary)")
     print(f"   Total Primary apps NOT Key: {int(total_primary_not_key)}")
     print(f"   ")
-    print(f"   With NO IT/IS risk: {len(primary_no_risk)} (confirmed understated)")
-    print(f"   With IT/IS risk: {len(primary_have_risk)} (potentially understated)")
+    print(f"   ✓ ARA VALIDATION (vs CURRENT system risk):")
+    print(f"   Higher IT Risk than current: {len(primary_higher_it)} entities")
+    print(f"   Higher IS Risk than current: {len(primary_higher_is)} entities")
+    print(f"   Higher risk (either IT or IS): {len(primary_higher_either)} entities → POSSIBLY UNDERSTATED")
+    print(f"   Same/lower risk: {len(primary_issue) - len(primary_higher_either)} entities → Appears correct")
     print(f"   ")
     print(f"   Distribution:")
     print(f"   1-2 apps not Key: {len(primary_issue[primary_issue['# Primary Apps Not Key'] <= 2])}")
@@ -386,16 +646,26 @@ print()
 secondary_issue = summary_df[summary_df['HIGH: Secondary Not Key']]
 total_secondary_not_key = summary_df['# Secondary Apps Not Key'].sum()
 secondary_no_risk = summary_df[summary_df['Secondary Not Key + No Risk']]
-secondary_have_risk = secondary_issue[secondary_issue['Any IT/IS Risk Applicable']]
 
 if len(secondary_issue) > 0:
+    # Check how many would have HIGHER risk than CURRENT if Secondary apps were Key
+    secondary_higher_it = secondary_issue[secondary_issue['Secondary Not Key: Higher than Current IT'] == True]
+    secondary_higher_is = secondary_issue[secondary_issue['Secondary Not Key: Higher than Current IS'] == True]
+    secondary_higher_either = secondary_issue[
+        (secondary_issue['Secondary Not Key: Higher than Current IT'] == True) |
+        (secondary_issue['Secondary Not Key: Higher than Current IS'] == True)
+    ]
+    
     print(f"⚠️  HIGH PRIORITY ISSUE - METHODOLOGY VIOLATION")
     print(f"   Entities with Secondary apps: {len(summary_df[summary_df['Total Secondary Apps'] > 0])}")
     print(f"   Entities with Secondary NOT Key: {len(secondary_issue)} ({len(secondary_issue)/len(summary_df[summary_df['Total Secondary Apps'] > 0])*100:.1f}% of entities with Secondary)")
     print(f"   Total Secondary apps NOT Key: {int(total_secondary_not_key)}")
     print(f"   ")
-    print(f"   With NO IT/IS risk: {len(secondary_no_risk)} (confirmed understated)")
-    print(f"   With IT/IS risk: {len(secondary_have_risk)} (potentially understated)")
+    print(f"   ✓ ARA VALIDATION (vs CURRENT system risk):")
+    print(f"   Higher IT Risk than current: {len(secondary_higher_it)} entities")
+    print(f"   Higher IS Risk than current: {len(secondary_higher_is)} entities")
+    print(f"   Higher risk (either IT or IS): {len(secondary_higher_either)} entities → POSSIBLY UNDERSTATED")
+    print(f"   Same/lower risk: {len(secondary_issue) - len(secondary_higher_either)} entities → Appears correct")
 else:
     print(f"✓ No issues with Secondary app tagging")
 
@@ -428,6 +698,45 @@ else:
 print()
 
 # =============================================================================
+# SUMMARY STATISTICS
+# =============================================================================
+
+print("="*70)
+print("OVERALL ARA-VALIDATED IMPACT SUMMARY")
+print("="*70)
+print()
+
+# Count entities with possibly misstated risk
+possibly_misstated_it = len(summary_df[summary_df['Possibly Misstated IT Risk']])
+possibly_misstated_is = len(summary_df[summary_df['Possibly Misstated IS Risk']])
+possibly_misstated_either = len(summary_df[
+    (summary_df['Possibly Misstated IT Risk']) |
+    (summary_df['Possibly Misstated IS Risk'])
+])
+
+print(f"Entities with POSSIBLY MISSTATED risk:")
+print(f"   IT Risk: {possibly_misstated_it} entities")
+print(f"   IS Risk: {possibly_misstated_is} entities")
+print(f"   Either IT or IS Risk: {possibly_misstated_either} entities ({possibly_misstated_either/len(summary_df)*100:.1f}%)")
+print()
+print(f"Breakdown:")
+print(f"   Ghost apps (possibly wrong): {len(ghost_entities)} entities")
+if len(primary_issue) > 0:
+    primary_higher_either = len(primary_issue[
+        (primary_issue['Primary Not Key: Higher than Current IT'] == True) |
+        (primary_issue['Primary Not Key: Higher than Current IS'] == True)
+    ])
+    print(f"   Primary not Key (possibly understated): {primary_higher_either} entities")
+if len(secondary_issue) > 0:
+    secondary_higher_either = len(secondary_issue[
+        (secondary_issue['Secondary Not Key: Higher than Current IT'] == True) |
+        (secondary_issue['Secondary Not Key: Higher than Current IS'] == True)
+    ])
+    print(f"   Secondary not Key (possibly understated): {secondary_higher_either} entities")
+
+print()
+
+# =============================================================================
 # EXPORT OBSERVATION 1: GHOST APPS
 # =============================================================================
 
@@ -449,10 +758,11 @@ if len(ghost_entities) > 0:
             {'Metric': 'Total ghost apps', 'Value': int(total_ghost_apps)},
             {'Metric': 'Avg per entity', 'Value': f"{total_ghost_apps/len(ghost_entities):.1f}"},
             {'Metric': '', 'Value': ''},
-            {'Metric': 'With NO IT/IS risk', 'Value': len(ghost_no_risk)},
-            {'Metric': 'With IT/IS risk (using wrong apps)', 'Value': len(ghost_entities) - len(ghost_no_risk)},
+            {'Metric': 'RISK ASSESSMENT:', 'Value': ''},
+            {'Metric': 'All entities: POSSIBLY MISSTATED', 'Value': len(ghost_entities)},
             {'Metric': '', 'Value': ''},
-            {'Metric': 'Impact', 'Value': 'Risk ratings are WRONG (using wrong application data)'},
+            {'Metric': 'Impact', 'Value': 'Ghost apps are WRONG apps - correct apps unknown'},
+            {'Metric': 'Note', 'Value': 'Cannot validate accuracy without identifying correct apps'},
         ])
         obs1_summary.to_excel(writer, sheet_name='Summary', index=False)
         
@@ -464,8 +774,17 @@ if len(ghost_entities) > 0:
         top_ghost = ghost_export.head(10)
         top_ghost.to_excel(writer, sheet_name='Top 10', index=False)
         
-        # Tab 4: Distribution by team (if available)
-        if RISKS_CORE_TEAM_ACTUAL:
+        # Tab 4: By Team and Leader
+        if RISKS_CORE_TEAM_ACTUAL and RISKS_AUDIT_LEADER_ACTUAL:
+            team_leader_dist = ghost_entities.groupby(['Core Audit Team', 'Audit Leader']).agg({
+                'Audit Entity ID': 'count',
+                '# Ghost Apps (Key but Not Mapped)': 'sum'
+            }).reset_index()
+            team_leader_dist.columns = ['Core Audit Team', 'Audit Leader', '# Entities', 'Total Ghost Apps']
+            team_leader_dist['Risk Assessment'] = 'All: Possibly Misstated'
+            team_leader_dist = team_leader_dist.sort_values(['Core Audit Team', '# Entities'], ascending=[True, False])
+            team_leader_dist.to_excel(writer, sheet_name='By Team and Leader', index=False)
+        elif RISKS_CORE_TEAM_ACTUAL:
             team_dist = ghost_entities.groupby('Core Audit Team').agg({
                 'Audit Entity ID': 'count',
                 '# Ghost Apps (Key but Not Mapped)': 'sum'
@@ -482,6 +801,14 @@ if len(ghost_entities) > 0:
 
 if len(primary_issue) > 0:
     with pd.ExcelWriter(OUTPUT_OBSERVATION_2, engine='openpyxl') as writer:
+        # Calculate ARA-validated metrics
+        primary_higher_it = primary_issue[primary_issue['Primary Not Key: Higher than Current IT'] == True]
+        primary_higher_is = primary_issue[primary_issue['Primary Not Key: Higher than Current IS'] == True]
+        primary_higher_either = primary_issue[
+            (primary_issue['Primary Not Key: Higher than Current IT'] == True) |
+            (primary_issue['Primary Not Key: Higher than Current IS'] == True)
+        ]
+        
         # Tab 1: Summary
         obs2_summary = pd.DataFrame([
             {'Metric': 'OBSERVATION 2: PRIMARY APPS NOT TAGGED AS KEY', 'Value': ''},
@@ -494,8 +821,11 @@ if len(primary_issue) > 0:
             {'Metric': '% non-compliance', 'Value': f"{len(primary_issue)/len(summary_df[summary_df['Total Primary Apps'] > 0])*100:.1f}%"},
             {'Metric': 'Total Primary apps NOT Key', 'Value': int(total_primary_not_key)},
             {'Metric': '', 'Value': ''},
-            {'Metric': 'With NO IT/IS risk', 'Value': len(primary_no_risk)},
-            {'Metric': 'With IT/IS risk', 'Value': len(primary_have_risk)},
+            {'Metric': 'ARA VALIDATION (vs CURRENT risk):', 'Value': ''},
+            {'Metric': 'Higher IT Risk than current', 'Value': len(primary_higher_it)},
+            {'Metric': 'Higher IS Risk than current', 'Value': len(primary_higher_is)},
+            {'Metric': 'Higher risk (either): POSSIBLY UNDERSTATED', 'Value': len(primary_higher_either)},
+            {'Metric': 'Same/lower risk: Appears correct', 'Value': len(primary_issue) - len(primary_higher_either)},
             {'Metric': '', 'Value': ''},
             {'Metric': 'Distribution:', 'Value': ''},
             {'Metric': '1-2 apps not Key', 'Value': len(primary_issue[primary_issue['# Primary Apps Not Key'] <= 2])},
@@ -508,24 +838,37 @@ if len(primary_issue) > 0:
         primary_export = primary_issue.sort_values('# Primary Apps Not Key', ascending=False)
         primary_export.to_excel(writer, sheet_name='All Primary Not Key', index=False)
         
-        # Tab 3: High count (6+)
+        # Tab 3: Possibly Understated (ARA-validated)
+        primary_understated = primary_higher_either.sort_values('# Primary Apps Not Key', ascending=False)
+        primary_understated.to_excel(writer, sheet_name='Possibly Understated (ARA)', index=False)
+        
+        # Tab 4: High count (6+)
         high_count = primary_issue[primary_issue['# Primary Apps Not Key'] > 5].sort_values('# Primary Apps Not Key', ascending=False)
         high_count.to_excel(writer, sheet_name='High Count (6+)', index=False)
         
-        # Tab 4: No Risk (confirmed understated)
+        # Tab 5: No Risk (confirmed understated)
         primary_no_risk.to_excel(writer, sheet_name='No Risk (Confirmed)', index=False)
         
-        # Tab 5: Has Risk (potentially understated)
-        primary_have_risk_sorted = primary_have_risk.sort_values('# Primary Apps Not Key', ascending=False).head(20)
-        primary_have_risk_sorted.to_excel(writer, sheet_name='Has Risk (Potential)', index=False)
-        
-        # Tab 6: By Team (if available)
-        if RISKS_CORE_TEAM_ACTUAL:
+        # Tab 6: By Team and Leader
+        if RISKS_CORE_TEAM_ACTUAL and RISKS_AUDIT_LEADER_ACTUAL:
+            team_leader_dist = primary_issue.groupby(['Core Audit Team', 'Audit Leader']).agg({
+                'Audit Entity ID': 'count',
+                '# Primary Apps Not Key': 'sum',
+                'Primary Not Key: Higher than Current IT': 'sum',
+                'Primary Not Key: Higher than Current IS': 'sum'
+            }).reset_index()
+            team_leader_dist.columns = ['Core Audit Team', 'Audit Leader', '# Entities', 'Total Primary Not Key', 'Higher IT Risk', 'Higher IS Risk']
+            team_leader_dist['Possibly Understated'] = team_leader_dist['Higher IT Risk'] + team_leader_dist['Higher IS Risk']
+            team_leader_dist = team_leader_dist.sort_values(['Core Audit Team', 'Possibly Understated'], ascending=[True, False])
+            team_leader_dist.to_excel(writer, sheet_name='By Team and Leader', index=False)
+        elif RISKS_CORE_TEAM_ACTUAL:
             team_dist = primary_issue.groupby('Core Audit Team').agg({
                 'Audit Entity ID': 'count',
-                '# Primary Apps Not Key': 'sum'
+                '# Primary Apps Not Key': 'sum',
+                'Primary Not Key: Higher than Current IT': 'sum',
+                'Primary Not Key: Higher than Current IS': 'sum'
             }).reset_index()
-            team_dist.columns = ['Core Audit Team', '# Entities', 'Total Primary Apps Not Key']
+            team_dist.columns = ['Core Audit Team', '# Entities', 'Total Primary Not Key', 'Higher IT Risk', 'Higher IS Risk']
             team_dist = team_dist.sort_values('# Entities', ascending=False)
             team_dist.to_excel(writer, sheet_name='By Team', index=False)
     
@@ -537,6 +880,14 @@ if len(primary_issue) > 0:
 
 if len(secondary_issue) > 0:
     with pd.ExcelWriter(OUTPUT_OBSERVATION_3, engine='openpyxl') as writer:
+        # Calculate ARA-validated metrics
+        secondary_higher_it = secondary_issue[secondary_issue['Secondary Not Key: Higher than Current IT'] == True]
+        secondary_higher_is = secondary_issue[secondary_issue['Secondary Not Key: Higher than Current IS'] == True]
+        secondary_higher_either = secondary_issue[
+            (secondary_issue['Secondary Not Key: Higher than Current IT'] == True) |
+            (secondary_issue['Secondary Not Key: Higher than Current IS'] == True)
+        ]
+        
         # Tab 1: Summary
         obs3_summary = pd.DataFrame([
             {'Metric': 'OBSERVATION 3: SECONDARY APPS NOT TAGGED AS KEY', 'Value': ''},
@@ -550,8 +901,11 @@ if len(secondary_issue) > 0:
             {'Metric': '% non-compliance', 'Value': f"{len(secondary_issue)/len(summary_df[summary_df['Total Secondary Apps'] > 0])*100:.1f}%"},
             {'Metric': 'Total Secondary apps NOT Key', 'Value': int(total_secondary_not_key)},
             {'Metric': '', 'Value': ''},
-            {'Metric': 'With NO IT/IS risk', 'Value': len(secondary_no_risk)},
-            {'Metric': 'With IT/IS risk', 'Value': len(secondary_have_risk)},
+            {'Metric': 'ARA VALIDATION (vs CURRENT risk):', 'Value': ''},
+            {'Metric': 'Higher IT Risk than current', 'Value': len(secondary_higher_it)},
+            {'Metric': 'Higher IS Risk than current', 'Value': len(secondary_higher_is)},
+            {'Metric': 'Higher risk (either): POSSIBLY UNDERSTATED', 'Value': len(secondary_higher_either)},
+            {'Metric': 'Same/lower risk: Appears correct', 'Value': len(secondary_issue) - len(secondary_higher_either)},
         ])
         obs3_summary.to_excel(writer, sheet_name='Summary', index=False)
         
@@ -559,20 +913,33 @@ if len(secondary_issue) > 0:
         secondary_export = secondary_issue.sort_values('# Secondary Apps Not Key', ascending=False)
         secondary_export.to_excel(writer, sheet_name='All Secondary Not Key', index=False)
         
-        # Tab 3: No Risk (confirmed understated)
+        # Tab 3: Possibly Understated (ARA-validated)
+        secondary_understated = secondary_higher_either.sort_values('# Secondary Apps Not Key', ascending=False)
+        secondary_understated.to_excel(writer, sheet_name='Possibly Understated (ARA)', index=False)
+        
+        # Tab 4: No Risk (confirmed understated)
         secondary_no_risk.to_excel(writer, sheet_name='No Risk (Confirmed)', index=False)
         
-        # Tab 4: Has Risk (potentially understated)
-        secondary_have_risk_sorted = secondary_have_risk.sort_values('# Secondary Apps Not Key', ascending=False).head(20)
-        secondary_have_risk_sorted.to_excel(writer, sheet_name='Has Risk (Potential)', index=False)
-        
-        # Tab 5: By Team (if available)
-        if RISKS_CORE_TEAM_ACTUAL:
+        # Tab 5: By Team and Leader
+        if RISKS_CORE_TEAM_ACTUAL and RISKS_AUDIT_LEADER_ACTUAL:
+            team_leader_dist = secondary_issue.groupby(['Core Audit Team', 'Audit Leader']).agg({
+                'Audit Entity ID': 'count',
+                '# Secondary Apps Not Key': 'sum',
+                'Secondary Not Key: Higher than Current IT': 'sum',
+                'Secondary Not Key: Higher than Current IS': 'sum'
+            }).reset_index()
+            team_leader_dist.columns = ['Core Audit Team', 'Audit Leader', '# Entities', 'Total Secondary Not Key', 'Higher IT Risk', 'Higher IS Risk']
+            team_leader_dist['Possibly Understated'] = team_leader_dist['Higher IT Risk'] + team_leader_dist['Higher IS Risk']
+            team_leader_dist = team_leader_dist.sort_values(['Core Audit Team', 'Possibly Understated'], ascending=[True, False])
+            team_leader_dist.to_excel(writer, sheet_name='By Team and Leader', index=False)
+        elif RISKS_CORE_TEAM_ACTUAL:
             team_dist = secondary_issue.groupby('Core Audit Team').agg({
                 'Audit Entity ID': 'count',
-                '# Secondary Apps Not Key': 'sum'
+                '# Secondary Apps Not Key': 'sum',
+                'Secondary Not Key: Higher than Current IT': 'sum',
+                'Secondary Not Key: Higher than Current IS': 'sum'
             }).reset_index()
-            team_dist.columns = ['Core Audit Team', '# Entities', 'Total Secondary Apps Not Key']
+            team_dist.columns = ['Core Audit Team', '# Entities', 'Total Secondary Not Key', 'Higher IT Risk', 'Higher IS Risk']
             team_dist = team_dist.sort_values('# Entities', ascending=False)
             team_dist.to_excel(writer, sheet_name='By Team', index=False)
     
@@ -613,6 +980,26 @@ if len(all_auto_fail) > 0:
         # Tab 4: Secondary Key failures (if any)
         if len(secondary_auto_fail) > 0:
             secondary_auto_fail.to_excel(writer, sheet_name='Secondary Key Failures', index=False)
+        
+        # Tab 5: By Team and Leader
+        if RISKS_CORE_TEAM_ACTUAL and RISKS_AUDIT_LEADER_ACTUAL:
+            team_leader_dist = all_auto_fail.groupby(['Core Audit Team', 'Audit Leader']).agg({
+                'Audit Entity ID': 'count',
+                'Primary Key Apps': 'sum',
+                'Secondary Key Apps': 'sum'
+            }).reset_index()
+            team_leader_dist.columns = ['Core Audit Team', 'Audit Leader', '# Entities', 'Total Primary Key Apps', 'Total Secondary Key Apps']
+            team_leader_dist = team_leader_dist.sort_values(['Core Audit Team', '# Entities'], ascending=[True, False])
+            team_leader_dist.to_excel(writer, sheet_name='By Team and Leader', index=False)
+        elif RISKS_CORE_TEAM_ACTUAL:
+            team_dist = all_auto_fail.groupby('Core Audit Team').agg({
+                'Audit Entity ID': 'count',
+                'Primary Key Apps': 'sum',
+                'Secondary Key Apps': 'sum'
+            }).reset_index()
+            team_dist.columns = ['Core Audit Team', '# Entities', 'Total Primary Key Apps', 'Total Secondary Key Apps']
+            team_dist = team_dist.sort_values('# Entities', ascending=False)
+            team_dist.to_excel(writer, sheet_name='By Team', index=False)
     
     print(f"✓ {OUTPUT_OBSERVATION_4}")
 
@@ -621,38 +1008,58 @@ if len(all_auto_fail) > 0:
 # =============================================================================
 
 with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
+    # Calculate overall metrics
+    if len(primary_issue) > 0:
+        primary_higher_either = len(primary_issue[
+            (primary_issue['Primary Not Key: Higher than Current IT'] == True) |
+            (primary_issue['Primary Not Key: Higher than Current IS'] == True)
+        ])
+    else:
+        primary_higher_either = 0
+    
+    if len(secondary_issue) > 0:
+        secondary_higher_either = len(secondary_issue[
+            (secondary_issue['Secondary Not Key: Higher than Current IT'] == True) |
+            (secondary_issue['Secondary Not Key: Higher than Current IS'] == True)
+        ])
+    else:
+        secondary_higher_either = 0
+    
     # Tab 1: Overall Summary
     exec_summary = pd.DataFrame([
         {'Metric': 'IT/IS RISK APPLICABILITY ANALYSIS', 'Value': '', 'Details': ''},
-        {'Metric': 'EXECUTIVE SUMMARY', 'Value': '', 'Details': ''},
+        {'Metric': 'EXECUTIVE SUMMARY (ARA-Validated)', 'Value': '', 'Details': ''},
+        {'Metric': 'Comparison: Apps vs CURRENT SYSTEM RISK', 'Value': '', 'Details': ''},
         {'Metric': '', 'Value': '', 'Details': ''},
         {'Metric': 'Scope', 'Value': len(summary_df), 'Details': 'audit entities analyzed'},
         {'Metric': '', 'Value': '', 'Details': ''},
         {'Metric': 'OBSERVATION 1: Ghost Applications', 'Value': '', 'Details': 'CRITICAL'},
         {'Metric': '└─ Entities affected', 'Value': len(ghost_entities) if len(ghost_entities) > 0 else 0, 'Details': f"{len(ghost_entities)/len(summary_df)*100:.1f}%" if len(ghost_entities) > 0 else '0%'},
-        {'Metric': '└─ Total ghost apps', 'Value': int(total_ghost_apps) if len(ghost_entities) > 0 else 0, 'Details': 'risk calculated from WRONG apps'},
+        {'Metric': '└─ Total ghost apps', 'Value': int(total_ghost_apps) if len(ghost_entities) > 0 else 0, 'Details': ''},
+        {'Metric': '└─ Risk Assessment', 'Value': len(ghost_entities) if len(ghost_entities) > 0 else 0, 'Details': 'POSSIBLY MISSTATED (wrong apps)'},
         {'Metric': '', 'Value': '', 'Details': ''},
         {'Metric': 'OBSERVATION 2: Primary Apps Not Key', 'Value': '', 'Details': 'HIGH'},
         {'Metric': '└─ Entities affected', 'Value': len(primary_issue) if len(primary_issue) > 0 else 0, 'Details': f"{len(primary_issue)/len(summary_df)*100:.1f}%" if len(primary_issue) > 0 else '0%'},
         {'Metric': '└─ Total Primary apps not Key', 'Value': int(total_primary_not_key) if len(primary_issue) > 0 else 0, 'Details': ''},
-        {'Metric': '└─ With NO IT/IS risk', 'Value': len(primary_no_risk) if len(primary_issue) > 0 else 0, 'Details': 'confirmed understated'},
-        {'Metric': '└─ With IT/IS risk', 'Value': len(primary_have_risk) if len(primary_issue) > 0 else 0, 'Details': 'potentially understated'},
+        {'Metric': '└─ ARA: Possibly understated', 'Value': primary_higher_either, 'Details': 'higher risk than current'},
+        {'Metric': '└─ ARA: Appears correct', 'Value': len(primary_issue) - primary_higher_either if len(primary_issue) > 0 else 0, 'Details': 'same/lower risk'},
         {'Metric': '', 'Value': '', 'Details': ''},
         {'Metric': 'OBSERVATION 3: Secondary Apps Not Key', 'Value': '', 'Details': 'HIGH'},
         {'Metric': '└─ Entities affected', 'Value': len(secondary_issue) if len(secondary_issue) > 0 else 0, 'Details': f"{len(secondary_issue)/len(summary_df)*100:.1f}%" if len(secondary_issue) > 0 else '0%'},
         {'Metric': '└─ Total Secondary apps not Key', 'Value': int(total_secondary_not_key) if len(secondary_issue) > 0 else 0, 'Details': 'methodology violation'},
-        {'Metric': '└─ With NO IT/IS risk', 'Value': len(secondary_no_risk) if len(secondary_issue) > 0 else 0, 'Details': 'confirmed understated'},
-        {'Metric': '└─ With IT/IS risk', 'Value': len(secondary_have_risk) if len(secondary_issue) > 0 else 0, 'Details': 'potentially understated'},
+        {'Metric': '└─ ARA: Possibly understated', 'Value': secondary_higher_either, 'Details': 'higher risk than current'},
+        {'Metric': '└─ ARA: Appears correct', 'Value': len(secondary_issue) - secondary_higher_either if len(secondary_issue) > 0 else 0, 'Details': 'same/lower risk'},
         {'Metric': '', 'Value': '', 'Details': ''},
         {'Metric': 'OBSERVATION 4: Automation Failures', 'Value': '', 'Details': 'HIGH'},
         {'Metric': '└─ Entities affected', 'Value': len(all_auto_fail) if len(all_auto_fail) > 0 else 0, 'Details': 'Key apps but no risk'},
         {'Metric': '', 'Value': '', 'Details': ''},
         {'Metric': 'TOTAL ENTITIES WITH ANY ISSUE', 'Value': len(summary_df[summary_df['ANY ISSUE']]), 'Details': f"{len(summary_df[summary_df['ANY ISSUE']])/len(summary_df)*100:.1f}%"},
         {'Metric': '', 'Value': '', 'Details': ''},
-        {'Metric': 'CONFIRMED IMPACT', 'Value': '', 'Details': ''},
-        {'Metric': '└─ Wrong risk ratings (ghost apps)', 'Value': len(ghost_entities) - len(ghost_no_risk) if len(ghost_entities) > 0 else 0, 'Details': 'entities'},
-        {'Metric': '└─ Understated risk (no IT/IS risk)', 'Value': len(primary_no_risk) + len(secondary_no_risk) + len(ghost_no_risk), 'Details': 'entities'},
-        {'Metric': 'TOTAL CONFIRMED', 'Value': len(ghost_entities) + len(primary_no_risk) + len(secondary_no_risk), 'Details': f"{(len(ghost_entities) + len(primary_no_risk) + len(secondary_no_risk))/len(summary_df)*100:.1f}%"},
+        {'Metric': 'ARA-VALIDATED IMPACT SUMMARY', 'Value': '', 'Details': ''},
+        {'Metric': '└─ Possibly misstated (ghost apps)', 'Value': len(ghost_entities), 'Details': 'entities'},
+        {'Metric': '└─ Possibly understated (Primary not Key)', 'Value': primary_higher_either, 'Details': 'entities'},
+        {'Metric': '└─ Possibly understated (Secondary not Key)', 'Value': secondary_higher_either, 'Details': 'entities'},
+        {'Metric': 'TOTAL POSSIBLY MISSTATED RISK', 'Value': possibly_misstated_either, 'Details': f"{possibly_misstated_either/len(summary_df)*100:.1f}%"},
     ])
     exec_summary.to_excel(writer, sheet_name='Executive Summary', index=False)
     
@@ -664,7 +1071,7 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
             'Entities': len(ghost_entities) if len(ghost_entities) > 0 else 0,
             '% of Total': f"{len(ghost_entities)/len(summary_df)*100:.1f}%" if len(ghost_entities) > 0 else '0%',
             'Apps Affected': int(total_ghost_apps) if len(ghost_entities) > 0 else 0,
-            'Impact': 'Risk ratings WRONG',
+            'ARA Assessment': f"All {len(ghost_entities)} POSSIBLY MISSTATED (wrong apps)" if len(ghost_entities) > 0 else 'None',
             'File': OUTPUT_OBSERVATION_1 if len(ghost_entities) > 0 else 'N/A'
         },
         {
@@ -673,7 +1080,7 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
             'Entities': len(primary_issue) if len(primary_issue) > 0 else 0,
             '% of Total': f"{len(primary_issue)/len(summary_df)*100:.1f}%" if len(primary_issue) > 0 else '0%',
             'Apps Affected': int(total_primary_not_key) if len(primary_issue) > 0 else 0,
-            'Impact': f"{len(primary_no_risk)} confirmed, {len(primary_have_risk)} potential" if len(primary_issue) > 0 else 'None',
+            'ARA Assessment': f"{primary_higher_either} possibly understated, {len(primary_issue) - primary_higher_either if len(primary_issue) > 0 else 0} appear correct" if len(primary_issue) > 0 else 'None',
             'File': OUTPUT_OBSERVATION_2 if len(primary_issue) > 0 else 'N/A'
         },
         {
@@ -682,7 +1089,7 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
             'Entities': len(secondary_issue) if len(secondary_issue) > 0 else 0,
             '% of Total': f"{len(secondary_issue)/len(summary_df)*100:.1f}%" if len(secondary_issue) > 0 else '0%',
             'Apps Affected': int(total_secondary_not_key) if len(secondary_issue) > 0 else 0,
-            'Impact': f"{len(secondary_no_risk)} confirmed, {len(secondary_have_risk)} potential" if len(secondary_issue) > 0 else 'None',
+            'ARA Assessment': f"{secondary_higher_either} possibly understated, {len(secondary_issue) - secondary_higher_either if len(secondary_issue) > 0 else 0} appear correct" if len(secondary_issue) > 0 else 'None',
             'File': OUTPUT_OBSERVATION_3 if len(secondary_issue) > 0 else 'N/A'
         },
         {
@@ -691,22 +1098,85 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
             'Entities': len(all_auto_fail) if len(all_auto_fail) > 0 else 0,
             '% of Total': f"{len(all_auto_fail)/len(summary_df)*100:.1f}%" if len(all_auto_fail) > 0 else '0%',
             'Apps Affected': int(primary_auto_fail['Primary Key Apps'].sum() + secondary_auto_fail['Secondary Key Apps'].sum()) if len(all_auto_fail) > 0 else 0,
-            'Impact': 'Risk should exist but missing',
+            'ARA Assessment': 'Risk should exist but missing',
             'File': OUTPUT_OBSERVATION_4 if len(all_auto_fail) > 0 else 'N/A'
         }
     ])
     obs_comparison.to_excel(writer, sheet_name='Observation Comparison', index=False)
     
-    # Tab 3: Team Analysis (if available)
-    if RISKS_CORE_TEAM_ACTUAL:
-        # Count issues by team across all observations
+    # Tab 3: Team and Leader Analysis
+    if RISKS_CORE_TEAM_ACTUAL and RISKS_AUDIT_LEADER_ACTUAL:
+        # Count issues by team and leader across all observations
+        team_leader_summary = summary_df.groupby(['Core Audit Team', 'Audit Leader']).agg({
+            'Audit Entity ID': 'count',
+            'CRITICAL: Ghost Apps': 'sum',
+            'HIGH: Primary Not Key': 'sum',
+            'HIGH: Secondary Not Key': 'sum',
+            'Primary Key Auto Failure': 'sum',
+            'Secondary Key Auto Failure': 'sum',
+            'Ghost Apps Present': 'sum',
+            'Primary Not Key: Higher than Current IT': 'sum',
+            'Primary Not Key: Higher than Current IS': 'sum',
+            'Secondary Not Key: Higher than Current IT': 'sum',
+            'Secondary Not Key: Higher than Current IS': 'sum'
+        }).reset_index()
+        
+        team_leader_summary.columns = [
+            'Core Audit Team',
+            'Audit Leader',
+            'Total Entities',
+            'Ghost Apps',
+            'Primary Not Key',
+            'Secondary Not Key',
+            'Primary Auto Fail',
+            'Secondary Auto Fail',
+            'Ghost: Possibly Misstated',
+            'Primary: Higher IT (ARA)',
+            'Primary: Higher IS (ARA)',
+            'Secondary: Higher IT (ARA)',
+            'Secondary: Higher IS (ARA)'
+        ]
+        
+        # Add total issues column
+        team_leader_summary['Total Issues'] = (
+            team_leader_summary['Ghost Apps'] +
+            team_leader_summary['Primary Not Key'] +
+            team_leader_summary['Secondary Not Key'] +
+            team_leader_summary['Primary Auto Fail'] +
+            team_leader_summary['Secondary Auto Fail']
+        )
+        
+        # Add ARA-validated possibly misstated column
+        team_leader_summary['ARA: Possibly Misstated'] = (
+            team_leader_summary['Ghost: Possibly Misstated'] +
+            team_leader_summary['Primary: Higher IT (ARA)'] +
+            team_leader_summary['Primary: Higher IS (ARA)'] +
+            team_leader_summary['Secondary: Higher IT (ARA)'] +
+            team_leader_summary['Secondary: Higher IS (ARA)']
+        )
+        
+        # Calculate percentages
+        team_leader_summary['% Entities With Issues'] = round((team_leader_summary['Total Issues'] / team_leader_summary['Total Entities']) * 100, 1)
+        
+        # Sort by team, then by possibly misstated count
+        team_leader_summary = team_leader_summary.sort_values(['Core Audit Team', 'ARA: Possibly Misstated'], ascending=[True, False])
+        
+        team_leader_summary.to_excel(writer, sheet_name='By Team and Leader', index=False)
+    
+    elif RISKS_CORE_TEAM_ACTUAL:
+        # Count issues by team only
         team_summary = summary_df.groupby('Core Audit Team').agg({
             'Audit Entity ID': 'count',
             'CRITICAL: Ghost Apps': 'sum',
             'HIGH: Primary Not Key': 'sum',
             'HIGH: Secondary Not Key': 'sum',
             'Primary Key Auto Failure': 'sum',
-            'Secondary Key Auto Failure': 'sum'
+            'Secondary Key Auto Failure': 'sum',
+            'Ghost Apps Present': 'sum',
+            'Primary Not Key: Higher than Current IT': 'sum',
+            'Primary Not Key: Higher than Current IS': 'sum',
+            'Secondary Not Key: Higher than Current IT': 'sum',
+            'Secondary Not Key: Higher than Current IS': 'sum'
         }).reset_index()
         
         team_summary.columns = [
@@ -716,7 +1186,12 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
             'Primary Not Key',
             'Secondary Not Key',
             'Primary Auto Fail',
-            'Secondary Auto Fail'
+            'Secondary Auto Fail',
+            'Ghost: Possibly Misstated',
+            'Primary: Higher IT (ARA)',
+            'Primary: Higher IS (ARA)',
+            'Secondary: Higher IT (ARA)',
+            'Secondary: Higher IS (ARA)'
         ]
         
         # Add total issues column
@@ -728,11 +1203,20 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
             team_summary['Secondary Auto Fail']
         )
         
-        # Calculate percentages
-        team_summary['% With Issues'] = round((team_summary['Total Issues'] / team_summary['Total Entities']) * 100, 1)
+        # Add ARA-validated possibly misstated column
+        team_summary['ARA: Possibly Misstated'] = (
+            team_summary['Ghost: Possibly Misstated'] +
+            team_summary['Primary: Higher IT (ARA)'] +
+            team_summary['Primary: Higher IS (ARA)'] +
+            team_summary['Secondary: Higher IT (ARA)'] +
+            team_summary['Secondary: Higher IS (ARA)']
+        )
         
-        # Sort by total issues
-        team_summary = team_summary.sort_values('Total Issues', ascending=False)
+        # Calculate percentages
+        team_summary['% Entities With Issues'] = round((team_summary['Total Issues'] / team_summary['Total Entities']) * 100, 1)
+        
+        # Sort by possibly misstated count
+        team_summary = team_summary.sort_values('ARA: Possibly Misstated', ascending=False)
         
         team_summary.to_excel(writer, sheet_name='By Team', index=False)
 
@@ -742,7 +1226,75 @@ print(f"✓ {OUTPUT_EXECUTIVE_SUMMARY}")
 # EXPORT FULL ANALYSIS (SOURCE DATA)
 # =============================================================================
 
-summary_df.to_excel(OUTPUT_FULL_ANALYSIS, index=False)
+# Reorder columns for better readability
+cols_order = [
+    'Audit Entity ID',
+    'Core Audit Team',
+    'Audit Leader',
+    
+    # Flags
+    'CRITICAL: Ghost Apps',
+    'HIGH: Primary Not Key',
+    'HIGH: Secondary Not Key',
+    'ANY ISSUE',
+    
+    # Issue counts
+    '# Ghost Apps (Key but Not Mapped)',
+    '# Primary Apps Not Key',
+    '# Secondary Apps Not Key',
+    
+    # Current risk
+    'Current IT Risk',
+    'Current IS Risk',
+    'Any IT/IS Risk Applicable',
+    
+    # Risk assessments
+    'IT Risk Assessment',
+    'IS Risk Assessment',
+    'Possibly Misstated IT Risk',
+    'Possibly Misstated IS Risk',
+    
+    # ARA comparison results
+    'Primary Not Key: Higher than Current IT',
+    'Primary Not Key: Higher than Current IS',
+    'Secondary Not Key: Higher than Current IT',
+    'Secondary Not Key: Higher than Current IS',
+    'ALL Mapped Apps: Higher than Current IT',
+    'ALL Mapped Apps: Higher than Current IS',
+    
+    # Risk from different app sets
+    'Risk from Key Apps (incl ghosts)',
+    'IS Risk from Key Apps (incl ghosts)',
+    'Risk from ALL Mapped Apps',
+    'IS Risk from ALL Mapped Apps',
+    'Ghost Apps IT Risk',
+    'Ghost Apps IS Risk',
+    'Primary Not Key IT Risk',
+    'Primary Not Key IS Risk',
+    'Secondary Not Key IT Risk',
+    'Secondary Not Key IS Risk',
+    
+    # App counts
+    'Total Primary Apps',
+    'Total Secondary Apps',
+    'Total Mapped Apps',
+    'Primary Key Apps',
+    'Secondary Key Apps',
+    'Total Key Apps',
+    
+    # Detail columns
+    'Ghost App IDs',
+    'Primary Not Key IDs',
+    'Secondary Not Key IDs',
+    'Key App Driving IT (incl ghosts)',
+    'Key App Driving IS (incl ghosts)',
+]
+
+# Add remaining columns not in the order list
+remaining_cols = [col for col in summary_df.columns if col not in cols_order]
+summary_df_export = summary_df[cols_order + remaining_cols]
+
+summary_df_export.to_excel(OUTPUT_FULL_ANALYSIS, index=False)
 print(f"✓ {OUTPUT_FULL_ANALYSIS}")
 
 # =============================================================================
@@ -764,72 +1316,20 @@ if len(all_auto_fail) > 0:
     print(f"   {OUTPUT_OBSERVATION_4}")
 print(f"   {OUTPUT_FULL_ANALYSIS}")
 
-print(f"\n📁 Each observation file contains multiple tabs:")
-print(f"   - Summary (metrics and impact)")
-print(f"   - All data (complete list)")
+print(f"\n📁 Each observation file contains:")
+print(f"   - Summary tab (metrics with ARA validation)")
+print(f"   - All data tab (complete list)")
+print(f"   - ARA-validated impact tabs (possibly understated)")
 print(f"   - Filtered views (samples, high priority)")
-if RISKS_CORE_TEAM_ACTUAL:
-    print(f"   - By Team (distribution analysis)")
+if RISKS_CORE_TEAM_ACTUAL and RISKS_AUDIT_LEADER_ACTUAL:
+    print(f"   - By Team and Leader tab (accountability)")
+elif RISKS_CORE_TEAM_ACTUAL:
+    print(f"   - By Team tab (distribution)")
+
+print(f"\n✓ ARA VALIDATION COMPLETE")
+print(f"   Comparison: Apps vs CURRENT SYSTEM RISK")
+print(f"   Ghost apps: Possibly misstated (unknown correct apps)")
+print(f"   Untagged apps: Possibly understated when higher than current")
+print(f"   {possibly_misstated_either} entities with possibly misstated risk")
 
 print("\n" + "="*70)
-```
-
----
-
-## **What This Updated Script Does**
-
-### **1. Organized Output Files by Observation**
-
-Each observation gets its own file with multiple tabs:
-
-**Observation1_GhostApps.xlsx:**
-- Summary tab
-- All Ghost Apps tab
-- Top 10 tab
-- By Team tab (if team data available)
-
-**Observation2_PrimaryNotKey.xlsx:**
-- Summary tab
-- All Primary Not Key tab
-- High Count (6+) tab
-- No Risk (Confirmed) tab
-- Has Risk (Potential) tab
-- By Team tab
-
-**Observation3_SecondaryNotKey.xlsx:**
-- Summary tab
-- All Secondary Not Key tab
-- No Risk (Confirmed) tab
-- Has Risk (Potential) tab
-- By Team tab
-
-**Observation4_AutomationFailures.xlsx:**
-- Summary tab
-- All Automation Failures tab
-- Primary Key Failures tab (if any)
-- Secondary Key Failures tab (if any)
-
-### **2. Executive Summary File**
-
-**00_ExecutiveSummary.xlsx:**
-- Executive Summary tab (overall metrics)
-- Observation Comparison tab (side-by-side)
-- By Team tab (team analysis across all observations)
-
-### **3. Team Analysis**
-
-If Core Audit Team and Audit Leader columns exist, the script:
-- Includes them in all data exports
-- Creates "By Team" tabs showing distribution of issues
-- Creates team summary in Executive Summary showing which teams have most issues
-
-### **4. Easy Navigation**
-
-**File names are numbered and descriptive:**
-```
-00_ExecutiveSummary.xlsx
-Observation1_GhostApps.xlsx
-Observation2_PrimaryNotKey.xlsx
-Observation3_SecondaryNotKey.xlsx
-Observation4_AutomationFailures.xlsx
-SourceData_FullAnalysis.xlsx
