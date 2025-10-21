@@ -1,6 +1,6 @@
 """
-IT/IS RISK APPLICABILITY ANALYSIS
-Version: 1.0
+IT/IS RISK APPLICABILITY ANALYSIS WITH L2 KEY RISK CONTEXT
+Version: 2.0
 Created: [Date]
 Analyst: [Your Name]
 
@@ -12,6 +12,7 @@ Validates accuracy of IT/IS risk ratings across audit universe by:
 2. Identifying apps not tagged as Key (Primary and Secondary)
 3. Validating impact using ARA scores
 4. Comparing to current system risk
+5. Analyzing L2 Key Risk mappings to understand risk calculation pathways
 
 OUTPUTS:
 - 00_ExecutiveSummary.xlsx (overall results with methodology)
@@ -38,11 +39,13 @@ import re
 RISKS_FILE = "audit_entity_risks.xlsx"
 KPA_FILE = "kpa_tagging.xlsx"
 ARA_FILE = "all_applications.xlsx"
+L2_MAPPING_FILE = "l2_key_risks.xlsx"  # NEW: L2 Key Risk mappings
 
 # Sheet names
 RISKS_SHEET = 0
 KPA_SHEET = 0
 ARA_SHEET = 0
+L2_SHEET = 0
 
 # Column names in RISKS file (case-insensitive matching will be applied)
 RISKS_AE_ID_COL = "Audit Entity ID"
@@ -63,6 +66,11 @@ ARA_APP_ID_COL = "Application Risk Assessment(ARA) Records (Centall Applications
 ARA_AVAILABILITY_COL = "Availability Risk"
 ARA_INTEGRITY_COL = "Integrity Risk"
 ARA_CONFIDENTIALITY_COL = "Confidentiality Risk"
+
+# Column names in L2 file
+L2_AE_ID_COL = "Audit Entity ID"
+L2_KEY_RISK_COL = "Key Risk"  # L2 Key Risk name
+L2_L1_CATEGORIES_COL = "Tagged L1s"  # Multi-value cell with L1 categories
 
 # Output file names - ORGANIZED BY OBSERVATION
 OUTPUT_OBSERVATION_1 = "Observation1_GhostApps.xlsx"
@@ -97,10 +105,12 @@ print("="*70)
 risks_df = pd.read_excel(RISKS_FILE, sheet_name=RISKS_SHEET)
 kpa_df = pd.read_excel(KPA_FILE, sheet_name=KPA_SHEET)
 ara_df = pd.read_excel(ARA_FILE, sheet_name=ARA_SHEET)
+l2_df = pd.read_excel(L2_MAPPING_FILE, sheet_name=L2_SHEET)
 
 print(f"✓ Loaded {len(risks_df)} audit entities from risks file")
 print(f"✓ Loaded {len(kpa_df)} KPA records")
 print(f"✓ Loaded {len(ara_df)} ARA records")
+print(f"✓ Loaded {len(l2_df)} L2 Key Risk mappings")
 print()
 
 # =============================================================================
@@ -142,6 +152,10 @@ ARA_AVAILABILITY_ACTUAL = find_column(ara_df, ARA_AVAILABILITY_COL)
 ARA_INTEGRITY_ACTUAL = find_column(ara_df, ARA_INTEGRITY_COL)
 ARA_CONFIDENTIALITY_ACTUAL = find_column(ara_df, ARA_CONFIDENTIALITY_COL)
 
+L2_AE_ID_ACTUAL = find_column(l2_df, L2_AE_ID_COL)
+L2_KEY_RISK_ACTUAL = find_column(l2_df, L2_KEY_RISK_COL)
+L2_L1_CATEGORIES_ACTUAL = find_column(l2_df, L2_L1_CATEGORIES_COL)
+
 print("="*70)
 print("COLUMN MAPPING")
 print("="*70)
@@ -154,9 +168,8 @@ if RISKS_AUDIT_LEADER_ACTUAL:
     print(f"✓ Risks file - Audit Leader: '{RISKS_AUDIT_LEADER_ACTUAL}'")
 print(f"✓ KPA file - AE ID: '{KPA_AE_ID_ACTUAL}'")
 print(f"✓ ARA file - App ID: '{ARA_APP_ID_ACTUAL}'")
-print(f"✓ ARA file - Availability: '{ARA_AVAILABILITY_ACTUAL}'")
-print(f"✓ ARA file - Integrity: '{ARA_INTEGRITY_ACTUAL}'")
-print(f"✓ ARA file - Confidentiality: '{ARA_CONFIDENTIALITY_ACTUAL}'")
+print(f"✓ L2 file - AE ID: '{L2_AE_ID_ACTUAL}'")
+print(f"✓ L2 file - L1 Categories: '{L2_L1_CATEGORIES_ACTUAL}'")
 print()
 
 # =============================================================================
@@ -177,6 +190,99 @@ for _, row in ara_df.iterrows():
     }
 
 print(f"✓ Created ARA lookup for {len(ara_lookup)} applications")
+print()
+
+# =============================================================================
+# PARSE L2 KEY RISK MAPPINGS
+# =============================================================================
+
+print("="*70)
+print("BUILDING L2 KEY RISK MAPPINGS")
+print("="*70)
+
+def parse_l1_categories(value):
+    """
+    Parse L1 categories from a cell like:
+    "Compliance, Third Party, Information Systems Information Technology"
+    
+    Returns dict: {'IT': bool, 'IS': bool, 'TP': bool, 'Compliance': bool}
+    """
+    if pd.isna(value):
+        return {'IT': False, 'IS': False, 'TP': False, 'Compliance': False}
+    
+    # Convert to string and lowercase for matching
+    text = str(value).lower()
+    
+    result = {
+        'IT': False,
+        'IS': False,
+        'TP': False,
+        'Compliance': False
+    }
+    
+    # Check for each L1 category
+    # Information Technology (various possible spellings)
+    if any(phrase in text for phrase in ['information technology', 'info technology', 'it risk']):
+        result['IT'] = True
+    
+    # Information Security (various possible spellings)
+    if any(phrase in text for phrase in ['information security', 'info security', 'information systems', 'is risk']):
+        result['IS'] = True
+    
+    # Third Party
+    if any(phrase in text for phrase in ['third party', 'third-party', '3rd party']):
+        result['TP'] = True
+    
+    # Compliance
+    if 'compliance' in text:
+        result['Compliance'] = True
+    
+    return result
+
+# Show sample parsing
+print("Sample L1 category parsing (first 3 rows):")
+for i in range(min(3, len(l2_df))):
+    sample_value = l2_df.iloc[i][L2_L1_CATEGORIES_ACTUAL]
+    parsed = parse_l1_categories(sample_value)
+    print(f"  '{sample_value}' → IT:{parsed['IT']}, IS:{parsed['IS']}, TP:{parsed['TP']}")
+print()
+
+# Build L2 summary per entity
+l2_summary = {}
+for _, row in l2_df.iterrows():
+    ae_id = row[L2_AE_ID_ACTUAL]
+    l1_cats = parse_l1_categories(row[L2_L1_CATEGORIES_ACTUAL])
+    l2_name = str(row[L2_KEY_RISK_ACTUAL]) if pd.notna(row[L2_KEY_RISK_ACTUAL]) else ''
+    
+    if ae_id not in l2_summary:
+        l2_summary[ae_id] = {
+            'has_it': False, 
+            'has_is': False, 
+            'has_tp': False,
+            'it_l2s': [],
+            'is_l2s': [],
+            'tp_l2s': []
+        }
+    
+    # If this L2 has IT category, mark entity as having IT L2
+    if l1_cats['IT']:
+        l2_summary[ae_id]['has_it'] = True
+        if l2_name:
+            l2_summary[ae_id]['it_l2s'].append(l2_name)
+    
+    # If this L2 has IS category, mark entity as having IS L2
+    if l1_cats['IS']:
+        l2_summary[ae_id]['has_is'] = True
+        if l2_name:
+            l2_summary[ae_id]['is_l2s'].append(l2_name)
+    
+    # If this L2 has TP category, mark entity as having TP L2
+    if l1_cats['TP']:
+        l2_summary[ae_id]['has_tp'] = True
+        if l2_name:
+            l2_summary[ae_id]['tp_l2s'].append(l2_name)
+
+print(f"✓ Created L2 mappings for {len(l2_summary)} entities")
 print()
 
 # =============================================================================
@@ -317,7 +423,7 @@ kpa_key_map = (
 # =============================================================================
 
 print("="*70)
-print("ANALYZING DATA WITH ARA VALIDATION")
+print("ANALYZING DATA WITH ARA VALIDATION AND L2 CONTEXT")
 print("="*70)
 print("Comparison Logic: Apps vs CURRENT SYSTEM RISK")
 print()
@@ -332,6 +438,16 @@ for ae_id in risks_df[RISKS_AE_ID_ACTUAL]:
     # Get team info
     core_team = ae_core_team_map.get(ae_id, 'Unknown') if ae_core_team_map else 'Unknown'
     audit_leader = ae_audit_leader_map.get(ae_id, 'Unknown') if ae_audit_leader_map else 'Unknown'
+    
+    # Get L2 mappings
+    l2_info = l2_summary.get(ae_id, {
+        'has_it': False, 
+        'has_is': False, 
+        'has_tp': False,
+        'it_l2s': [],
+        'is_l2s': [],
+        'tp_l2s': []
+    })
     
     # Get all mapped apps
     all_mapped_apps = set(primary_apps + secondary_apps)
@@ -453,6 +569,17 @@ for ae_id in risks_df[RISKS_AE_ID_ACTUAL]:
         'Audit Entity ID': ae_id,
         'Core Audit Team': core_team,
         'Audit Leader': audit_leader,
+        
+        # L2 KEY RISK MAPPINGS (NEW)
+        'Has IT L2 Mappings': l2_info['has_it'],
+        'Has IS L2 Mappings': l2_info['has_is'],
+        'Has Third Party L2 Mappings': l2_info['has_tp'],
+        '# IT L2 Key Risks': len(l2_info['it_l2s']),
+        '# IS L2 Key Risks': len(l2_info['is_l2s']),
+        '# Third Party L2 Key Risks': len(l2_info['tp_l2s']),
+        'IT L2 Risk Names': ', '.join(l2_info['it_l2s']) if l2_info['it_l2s'] else '',
+        'IS L2 Risk Names': ', '.join(l2_info['is_l2s']) if l2_info['is_l2s'] else '',
+        'Third Party L2 Risk Names': ', '.join(l2_info['tp_l2s']) if l2_info['tp_l2s'] else '',
         
         # Mapping counts
         'Total Primary Apps': total_primary,
@@ -598,6 +725,27 @@ summary_df['Possibly Misstated IS Risk'] = (
 )
 
 # =============================================================================
+# L2 SUMMARY STATISTICS
+# =============================================================================
+
+print("="*70)
+print("L2 KEY RISK MAPPING SUMMARY")
+print("="*70)
+print()
+
+both_l2 = len(summary_df[(summary_df['Has IT L2 Mappings']) & (summary_df['Has IS L2 Mappings'])])
+only_it_l2 = len(summary_df[(summary_df['Has IT L2 Mappings']) & (~summary_df['Has IS L2 Mappings'])])
+only_is_l2 = len(summary_df[(~summary_df['Has IT L2 Mappings']) & (summary_df['Has IS L2 Mappings'])])
+neither_l2 = len(summary_df[(~summary_df['Has IT L2 Mappings']) & (~summary_df['Has IS L2 Mappings'])])
+
+print(f"L2 Mapping Distribution:")
+print(f"  Both IT and IS L2s:  {both_l2:4d} ({both_l2/len(summary_df)*100:5.1f}%)")
+print(f"  Only IT L2s:         {only_it_l2:4d} ({only_it_l2/len(summary_df)*100:5.1f}%)")
+print(f"  Only IS L2s:         {only_is_l2:4d} ({only_is_l2/len(summary_df)*100:5.1f}%)")
+print(f"  No IT or IS L2s:     {neither_l2:4d} ({neither_l2/len(summary_df)*100:5.1f}%)")
+print()
+
+# =============================================================================
 # CONSOLE OUTPUT WITH ARA-VALIDATED STATISTICS
 # =============================================================================
 
@@ -645,16 +793,40 @@ if len(primary_issue) > 0:
         (primary_issue['Primary Not Key: Higher than Current IS'] == True)
     ]
     
+    # NEW: Split by L2 availability for PRIORITY
+    primary_higher_either_with_l2 = primary_higher_either[
+        (primary_higher_either['Has IT L2 Mappings']) |
+        (primary_higher_either['Has IS L2 Mappings'])
+    ]
+    
+    primary_higher_either_without_l2 = primary_higher_either[
+        (~primary_higher_either['Has IT L2 Mappings']) &
+        (~primary_higher_either['Has IS L2 Mappings'])
+    ]
+    
     print(f"⚠️  HIGH PRIORITY ISSUE")
     print(f"   Entities with Primary apps: {len(summary_df[summary_df['Total Primary Apps'] > 0])}")
     print(f"   Entities with Primary NOT Key: {len(primary_issue)} ({len(primary_issue)/len(summary_df[summary_df['Total Primary Apps'] > 0])*100:.1f}% of entities with Primary)")
     print(f"   Total Primary apps NOT Key: {int(total_primary_not_key)}")
     print(f"   ")
     print(f"   ✓ ARA VALIDATION (vs CURRENT system risk):")
-    print(f"   Higher IT Risk than current: {len(primary_higher_it)} entities")
-    print(f"   Higher IS Risk than current: {len(primary_higher_is)} entities")
-    print(f"   Higher risk (either IT or IS): {len(primary_higher_either)} entities → POSSIBLY UNDERSTATED")
-    print(f"   Same/lower risk: {len(primary_issue) - len(primary_higher_either)} entities → Appears correct")
+    print(f"   Possibly understated: {len(primary_higher_either)} entities")
+    print(f"   ")
+    print(f"   PRIORITY BREAKDOWN (TWO-PART FIX REQUIRED):")
+    print(f"   ")
+    print(f"   HIGH Priority (has relevant L2s): {len(primary_higher_either_with_l2)} entities")
+    print(f"   └─ Issue: Apps not tagged as Key")
+    print(f"   └─ Fix: Review and tag apps as Key in KPAs")
+    print(f"   └─ Impact: IMMEDIATE (L2 pathway exists, risk will auto-calculate)")
+    print(f"   ")
+    print(f"   MEDIUM Priority (missing relevant L2s): {len(primary_higher_either_without_l2)} entities")
+    print(f"   └─ Issue 1: L2 Key Risks not mapped (no pathway)")
+    print(f"   └─ Issue 2: Apps not tagged as Key (no content)")
+    print(f"   └─ Fix: Map L2s FIRST, then review and tag apps")
+    print(f"   └─ Impact: BOTH fixes needed before risk improves")
+    print(f"   ")
+    print(f"   ROOT CAUSE: Missing L2 mappings (foundation) AND missing Key tagging (content)")
+    print(f"   BOTH must be addressed for accurate risk ratings")
     print(f"   ")
     print(f"   Distribution:")
     print(f"   1-2 apps not Key: {len(primary_issue[primary_issue['# Primary Apps Not Key'] <= 2])}")
@@ -685,16 +857,40 @@ if len(secondary_issue) > 0:
         (secondary_issue['Secondary Not Key: Higher than Current IS'] == True)
     ]
     
+    # NEW: Split by L2 availability for PRIORITY
+    secondary_higher_either_with_l2 = secondary_higher_either[
+        (secondary_higher_either['Has IT L2 Mappings']) |
+        (secondary_higher_either['Has IS L2 Mappings'])
+    ]
+    
+    secondary_higher_either_without_l2 = secondary_higher_either[
+        (~secondary_higher_either['Has IT L2 Mappings']) &
+        (~secondary_higher_either['Has IS L2 Mappings'])
+    ]
+    
     print(f"⚠️  HIGH PRIORITY ISSUE - METHODOLOGY VIOLATION")
     print(f"   Entities with Secondary apps: {len(summary_df[summary_df['Total Secondary Apps'] > 0])}")
     print(f"   Entities with Secondary NOT Key: {len(secondary_issue)} ({len(secondary_issue)/len(summary_df[summary_df['Total Secondary Apps'] > 0])*100:.1f}% of entities with Secondary)")
     print(f"   Total Secondary apps NOT Key: {int(total_secondary_not_key)}")
     print(f"   ")
     print(f"   ✓ ARA VALIDATION (vs CURRENT system risk):")
-    print(f"   Higher IT Risk than current: {len(secondary_higher_it)} entities")
-    print(f"   Higher IS Risk than current: {len(secondary_higher_is)} entities")
-    print(f"   Higher risk (either IT or IS): {len(secondary_higher_either)} entities → POSSIBLY UNDERSTATED")
-    print(f"   Same/lower risk: {len(secondary_issue) - len(secondary_higher_either)} entities → Appears correct")
+    print(f"   Possibly understated: {len(secondary_higher_either)} entities")
+    print(f"   ")
+    print(f"   PRIORITY BREAKDOWN (TWO-PART FIX REQUIRED):")
+    print(f"   ")
+    print(f"   HIGH Priority (has relevant L2s): {len(secondary_higher_either_with_l2)} entities")
+    print(f"   └─ Issue: Apps not tagged as Key (methodology violation)")
+    print(f"   └─ Fix: Tag Secondary apps as Key per methodology")
+    print(f"   └─ Impact: IMMEDIATE (L2 pathway exists, risk will auto-calculate)")
+    print(f"   ")
+    print(f"   MEDIUM Priority (missing relevant L2s): {len(secondary_higher_either_without_l2)} entities")
+    print(f"   └─ Issue 1: L2 Key Risks not mapped (no pathway)")
+    print(f"   └─ Issue 2: Apps not tagged as Key (methodology violation)")
+    print(f"   └─ Fix: Map L2s FIRST, then tag Secondary apps as Key")
+    print(f"   └─ Impact: BOTH fixes needed before risk improves")
+    print(f"   ")
+    print(f"   ROOT CAUSE: Missing L2 mappings (foundation) AND missing Key tagging (content)")
+    print(f"   BOTH must be addressed for accurate risk ratings")
 else:
     print(f"✓ No issues with Secondary app tagging")
 
@@ -721,6 +917,8 @@ if len(all_auto_fail) > 0:
         print(f"   └─ Total Secondary Key apps affected: {int(secondary_auto_fail['Secondary Key Apps'].sum())}")
     print(f"   ")
     print(f"   Total entities with automation failures: {len(all_auto_fail)}")
+    print(f"   ")
+    print(f"   Note: Check if these entities have L2 mappings or if apps have N/A ARA scores")
 else:
     print(f"✓ No automation failures detected")
 
@@ -765,6 +963,13 @@ if len(secondary_issue) > 0:
 
 print()
 
+print(f"L2 Context:")
+print(f"   {neither_l2} entities have NO IT/IS L2 mappings")
+print(f"   └─ These correctly have no risk (no L2 pathway exists)")
+print(f"   └─ Action: Map relevant L2 Key Risks to KPAs")
+
+print()
+
 # =============================================================================
 # CREATE METHODOLOGY DOCUMENTATION
 # =============================================================================
@@ -789,6 +994,7 @@ methodology_doc = {
     'risks_file': RISKS_FILE,
     'kpa_file': KPA_FILE,
     'ara_file': ARA_FILE,
+    'l2_file': L2_MAPPING_FILE,
 }
 
 print(f"✓ Documented methodology")
@@ -870,13 +1076,13 @@ def create_methodology_tab(observation_number, observation_name, what_was_review
         {'Section': '=' * 70, 'Detail': ''},
         {'Section': '', 'Detail': ''},
         {'Section': 'To reperform this analysis:', 'Detail': ''},
-        {'Section': '1. Obtain the three source files listed above', 'Detail': ''},
+        {'Section': '1. Obtain the source files listed above', 'Detail': ''},
         {'Section': '2. Run the Python script with these files as inputs', 'Detail': ''},
         {'Section': '3. The script will regenerate all outputs', 'Detail': ''},
         {'Section': '4. Compare results to this file', 'Detail': ''},
         {'Section': '', 'Detail': ''},
         {'Section': 'Script Location', 'Detail': '[To be filled in]'},
-        {'Section': 'Script Version', 'Detail': 'v1.0 - ' + methodology_doc['analysis_date']},
+        {'Section': 'Script Version', 'Detail': 'v2.0 - ' + methodology_doc['analysis_date']},
     ])], ignore_index=True)
     
     return methodology_df
@@ -901,13 +1107,14 @@ if len(ghost_entities) > 0:
                 f'All {len(kpa_df)} KPA records across all entities',
                 f'All application mappings (Primary and Secondary) for each entity',
                 'Applications tagged as "Key" in KPAs for each entity',
-                f'ARA scores (Availability, Integrity, Confidentiality) for {total_ara_apps} applications'
+                f'ARA scores (Availability, Integrity, Confidentiality) for {total_ara_apps} applications',
+                f'L2 Key Risk mappings for {len(l2_summary)} entities'
             ],
             data_sources={
                 'Source File 1: Audit Entity Risks': {
                     'File Name': methodology_doc['risks_file'],
                     'Records': methodology_doc['total_entities_analyzed'],
-                    'Key Columns Used': f'{RISKS_AE_ID_COL}, {RISKS_IT_COL}, {RISKS_IS_COL}, {RISKS_PRIMARY_APPS_COL}, {RISKS_SECONDARY_APPS_COL}, {RISKS_CORE_TEAM_COL}, {RISKS_AUDIT_LEADER_COL}',
+                    'Key Columns Used': f'{RISKS_AE_ID_COL}, {RISKS_IT_COL}, {RISKS_IS_COL}, {RISKS_PRIMARY_APPS_COL}, {RISKS_SECONDARY_APPS_COL}',
                     'Purpose': 'Source of entity list, current risk ratings, and application mappings'
                 },
                 'Source File 2: KPA Tagging': {
@@ -922,6 +1129,12 @@ if len(ghost_entities) > 0:
                     'Records with Scores': methodology_doc['ara_records_with_scores'],
                     'Key Columns Used': f'{ARA_APP_ID_COL}, {ARA_AVAILABILITY_COL}, {ARA_INTEGRITY_COL}, {ARA_CONFIDENTIALITY_COL}',
                     'Purpose': 'Source of risk scores for each application'
+                },
+                'Source File 4: L2 Key Risk Mappings': {
+                    'File Name': methodology_doc['l2_file'],
+                    'Records': len(l2_df),
+                    'Key Columns Used': f'{L2_AE_ID_COL}, {L2_KEY_RISK_COL}, {L2_L1_CATEGORIES_COL}',
+                    'Purpose': 'L2 Key Risk mappings that establish RAI pathways for risk calculation'
                 }
             },
             analysis_steps=[
@@ -931,6 +1144,7 @@ if len(ghost_entities) > 0:
                 'Identified "ghost apps" = apps tagged as Key in KPAs but NOT in mapped apps list',
                 'Flagged entities with any ghost apps as CRITICAL issue',
                 f'Retrieved ARA scores from {ARA_FILE} for ghost apps and mapped apps',
+                f'Retrieved L2 Key Risk mappings from {L2_MAPPING_FILE} for context',
                 'Calculated what risk would be from ghost apps vs what mapped apps would give',
                 'Assessed impact: All entities with ghost apps have POSSIBLY MISSTATED risk (wrong apps being used)'
             ],
@@ -983,7 +1197,7 @@ if len(ghost_entities) > 0:
             }).reset_index()
             team_leader_dist.columns = ['Core Audit Team', 'Audit Leader', '# Entities', 'Total Ghost Apps']
             team_leader_dist['Risk Assessment'] = 'All: Possibly Misstated'
-            team_leader_dist = team_leader_dist.sort_values(['Core Audit Team', '# Entities'], ascending=[True, False])
+            team_leader_dist =team_leader_dist.sort_values(['Core Audit Team', '# Entities'], ascending=[True, False])
             team_leader_dist.to_excel(writer, sheet_name='By Team and Leader', index=False)
         elif RISKS_CORE_TEAM_ACTUAL:
             team_dist = ghost_entities.groupby('Core Audit Team').agg({
@@ -1008,6 +1222,17 @@ if len(primary_issue) > 0:
         (primary_issue['Primary Not Key: Higher than Current IS'] == True)
     ]
     
+    # Split by L2 availability
+    primary_higher_either_with_l2 = primary_higher_either[
+        (primary_higher_either['Has IT L2 Mappings']) |
+        (primary_higher_either['Has IS L2 Mappings'])
+    ]
+    
+    primary_higher_either_without_l2 = primary_higher_either[
+        (~primary_higher_either['Has IT L2 Mappings']) &
+        (~primary_higher_either['Has IS L2 Mappings'])
+    ]
+    
     with pd.ExcelWriter(OUTPUT_OBSERVATION_2, engine='openpyxl') as writer:
         
         # ========== METHODOLOGY TAB (FIRST) ==========
@@ -1019,13 +1244,14 @@ if len(primary_issue) > 0:
                 f'All applications mapped as "Primary" to each entity from {RISKS_FILE}',
                 f'All applications tagged as "Key" in KPAs from {KPA_FILE}',
                 f'Current IT and IS risk ratings for each entity from {RISKS_FILE}',
-                f'ARA scores for all Primary apps from {ARA_FILE}'
+                f'ARA scores for all Primary apps from {ARA_FILE}',
+                f'L2 Key Risk mappings from {L2_MAPPING_FILE} to identify risk calculation pathways'
             ],
             data_sources={
                 'Source File 1: Audit Entity Risks': {
                     'File Name': methodology_doc['risks_file'],
                     'Records': methodology_doc['total_entities_analyzed'],
-                    'Key Columns Used': f'{RISKS_AE_ID_COL}, {RISKS_IT_COL}, {RISKS_IS_COL}, {RISKS_PRIMARY_APPS_COL}, {RISKS_CORE_TEAM_COL}, {RISKS_AUDIT_LEADER_COL}',
+                    'Key Columns Used': f'{RISKS_AE_ID_COL}, {RISKS_IT_COL}, {RISKS_IS_COL}, {RISKS_PRIMARY_APPS_COL}',
                     'Purpose': 'Source of Primary app mappings and current risk ratings'
                 },
                 'Source File 2: KPA Tagging': {
@@ -1039,6 +1265,12 @@ if len(primary_issue) > 0:
                     'Records': methodology_doc['total_ara_records'],
                     'Key Columns Used': f'{ARA_APP_ID_COL}, {ARA_AVAILABILITY_COL}, {ARA_INTEGRITY_COL}, {ARA_CONFIDENTIALITY_COL}',
                     'Purpose': 'Risk scores to compare current vs potential risk'
+                },
+                'Source File 4: L2 Key Risk Mappings': {
+                    'File Name': methodology_doc['l2_file'],
+                    'Records': len(l2_df),
+                    'Key Columns Used': f'{L2_AE_ID_COL}, {L2_KEY_RISK_COL}, {L2_L1_CATEGORIES_COL}',
+                    'Purpose': 'Determine which entities have IT/IS L2 pathways for risk calculation'
                 }
             },
             analysis_steps=[
@@ -1050,20 +1282,21 @@ if len(primary_issue) > 0:
                 'Calculated IT risk from Primary not Key apps: max(Availability, Integrity)',
                 'Calculated IS risk from Primary not Key apps: Confidentiality',
                 'Compared calculated risk to CURRENT system risk',
-                'Flagged entities where Primary not Key apps have HIGHER risk than current as "Possibly Understated"',
-                'Flagged entities where Primary not Key apps have same/lower risk as "Appears Correct"'
+                f'Retrieved L2 Key Risk mappings from {L2_MAPPING_FILE}',
+                'Split entities by L2 availability: HIGH Priority (has L2s) vs MEDIUM Priority (needs L2s)',
+                'Flagged entities where Primary not Key apps have HIGHER risk than current as "Possibly Understated"'
             ],
             output_interpretation={
                 'Primary Apps Not Key': 'Applications mapped as Primary but NOT tagged as Key in any KPA',
                 'Why High Priority': 'These apps may should be considered for risk but currently aren\'t',
                 'ARA Validation Method': 'Compared ARA scores of untagged apps to CURRENT system risk',
                 'Possibly Understated': f'{len(primary_higher_either)} entities where untagged apps have HIGHER risk than current',
-                'Appears Correct': f'{len(primary_issue) - len(primary_higher_either)} entities where untagged apps have same/lower risk',
                 'Total Entities': f'{len(primary_issue)} entities with Primary apps not Key',
                 'Total Apps': f'{int(total_primary_not_key)} Primary apps not tagged as Key',
-                'IT Specific': f'{len(primary_higher_it)} entities would have higher IT risk',
-                'IS Specific': f'{len(primary_higher_is)} entities would have higher IS risk',
-                'Next Steps': 'Sample "Possibly Understated" entities to determine if apps SHOULD be Key'
+                'HIGH Priority (has L2s)': f'{len(primary_higher_either_with_l2)} entities - Tag apps as Key (immediate impact)',
+                'MEDIUM Priority (no L2s)': f'{len(primary_higher_either_without_l2)} entities - Map L2s first, then tag apps',
+                'TWO-PART FIX': 'L2 mappings provide the pathway; Key tagging provides the content. BOTH required.',
+                'Next Steps': 'Start with HIGH Priority entities (quick wins), then address MEDIUM Priority (more work)'
             }
         )
         methodology_obs2.to_excel(writer, sheet_name='Methodology', index=False)
@@ -1081,15 +1314,20 @@ if len(primary_issue) > 0:
             {'Metric': 'Total Primary apps NOT Key', 'Value': int(total_primary_not_key)},
             {'Metric': '', 'Value': ''},
             {'Metric': 'ARA VALIDATION (vs CURRENT risk):', 'Value': ''},
-            {'Metric': 'Higher IT Risk than current', 'Value': len(primary_higher_it)},
-            {'Metric': 'Higher IS Risk than current', 'Value': len(primary_higher_is)},
-            {'Metric': 'Higher risk (either): POSSIBLY UNDERSTATED', 'Value': len(primary_higher_either)},
-            {'Metric': 'Same/lower risk: Appears correct', 'Value': len(primary_issue) - len(primary_higher_either)},
+            {'Metric': 'Possibly understated (higher risk)', 'Value': len(primary_higher_either)},
             {'Metric': '', 'Value': ''},
-            {'Metric': 'Distribution:', 'Value': ''},
-            {'Metric': '1-2 apps not Key', 'Value': len(primary_issue[primary_issue['# Primary Apps Not Key'] <= 2])},
-            {'Metric': '3-5 apps not Key', 'Value': len(primary_issue[(primary_issue['# Primary Apps Not Key'] > 2) & (primary_issue['# Primary Apps Not Key'] <= 5)])},
-            {'Metric': '6+ apps not Key', 'Value': len(primary_issue[primary_issue['# Primary Apps Not Key'] > 5])},
+            {'Metric': 'PRIORITY BREAKDOWN (TWO-PART FIX):', 'Value': ''},
+            {'Metric': 'HIGH Priority (has relevant L2s)', 'Value': len(primary_higher_either_with_l2)},
+            {'Metric': '  Fix', 'Value': 'Review and tag apps as Key'},
+            {'Metric': '  Impact', 'Value': 'IMMEDIATE (L2 pathway exists)'},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'MEDIUM Priority (missing relevant L2s)', 'Value': len(primary_higher_either_without_l2)},
+            {'Metric': '  Fix 1', 'Value': 'Map L2 Key Risks FIRST'},
+            {'Metric': '  Fix 2', 'Value': 'Then review and tag apps as Key'},
+            {'Metric': '  Impact', 'Value': 'BOTH fixes needed'},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'ROOT CAUSE', 'Value': 'Missing L2 mappings (foundation) AND missing Key tagging (content)'},
+            {'Metric': 'BOTH must be addressed', 'Value': 'For accurate risk ratings'},
             {'Metric': '', 'Value': ''},
             {'Metric': 'See "Methodology" tab', 'Value': 'For complete analysis documentation'},
         ])
@@ -1099,16 +1337,24 @@ if len(primary_issue) > 0:
         primary_export = primary_issue.sort_values('# Primary Apps Not Key', ascending=False)
         primary_export.to_excel(writer, sheet_name='All Primary Not Key', index=False)
         
-        # ========== POSSIBLY UNDERSTATED TAB ==========
-        primary_understated = primary_higher_either.sort_values('# Primary Apps Not Key', ascending=False)
-        primary_understated.to_excel(writer, sheet_name='Possibly Understated (ARA)', index=False)
+        # ========== POSSIBLY UNDERSTATED - HIGH PRIORITY TAB ==========
+        if len(primary_higher_either_with_l2) > 0:
+            primary_high_priority = primary_higher_either_with_l2.sort_values('# Primary Apps Not Key', ascending=False)
+            primary_high_priority.to_excel(writer, sheet_name='HIGH Priority (has L2s)', index=False)
+        
+        # ========== POSSIBLY UNDERSTATED - MEDIUM PRIORITY TAB ==========
+        if len(primary_higher_either_without_l2) > 0:
+            primary_medium_priority = primary_higher_either_without_l2.sort_values('# Primary Apps Not Key', ascending=False)
+            primary_medium_priority.to_excel(writer, sheet_name='MEDIUM Priority (needs L2s)', index=False)
         
         # ========== HIGH COUNT TAB ==========
         high_count = primary_issue[primary_issue['# Primary Apps Not Key'] > 5].sort_values('# Primary Apps Not Key', ascending=False)
-        high_count.to_excel(writer, sheet_name='High Count (6+)', index=False)
+        if len(high_count) > 0:
+            high_count.to_excel(writer, sheet_name='High Count (6+)', index=False)
         
         # ========== NO RISK TAB ==========
-        primary_no_risk.to_excel(writer, sheet_name='No Risk (Confirmed)', index=False)
+        if len(primary_no_risk) > 0:
+            primary_no_risk.to_excel(writer, sheet_name='No Risk (Confirmed)', index=False)
         
         # ========== BY TEAM AND LEADER TAB ==========
         if RISKS_CORE_TEAM_ACTUAL and RISKS_AUDIT_LEADER_ACTUAL:
@@ -1116,11 +1362,13 @@ if len(primary_issue) > 0:
                 'Audit Entity ID': 'count',
                 '# Primary Apps Not Key': 'sum',
                 'Primary Not Key: Higher than Current IT': 'sum',
-                'Primary Not Key: Higher than Current IS': 'sum'
+                'Primary Not Key: Higher than Current IS': 'sum',
+                'Has IT L2 Mappings': 'sum',
+                'Has IS L2 Mappings': 'sum'
             }).reset_index()
-            team_leader_dist.columns = ['Core Audit Team', 'Audit Leader', '# Entities', 'Total Primary Not Key', 'Higher IT Risk', 'Higher IS Risk']
-            team_leader_dist['Possibly Understated'] = team_leader_dist['Higher IT Risk'] + team_leader_dist['Higher IS Risk']
-            team_leader_dist = team_leader_dist.sort_values(['Core Audit Team', 'Possibly Understated'], ascending=[True, False])
+            team_leader_dist.columns = ['Core Audit Team', 'Audit Leader', '# Entities', 'Total Primary Not Key', 
+                                        'Higher IT Risk', 'Higher IS Risk', '# with IT L2s', '# with IS L2s']
+            team_leader_dist = team_leader_dist.sort_values(['Core Audit Team', '# Entities'], ascending=[True, False])
             team_leader_dist.to_excel(writer, sheet_name='By Team and Leader', index=False)
         elif RISKS_CORE_TEAM_ACTUAL:
             team_dist = primary_issue.groupby('Core Audit Team').agg({
@@ -1147,6 +1395,17 @@ if len(secondary_issue) > 0:
         (secondary_issue['Secondary Not Key: Higher than Current IS'] == True)
     ]
     
+    # Split by L2 availability
+    secondary_higher_either_with_l2 = secondary_higher_either[
+        (secondary_higher_either['Has IT L2 Mappings']) |
+        (secondary_higher_either['Has IS L2 Mappings'])
+    ]
+    
+    secondary_higher_either_without_l2 = secondary_higher_either[
+        (~secondary_higher_either['Has IT L2 Mappings']) &
+        (~secondary_higher_either['Has IS L2 Mappings'])
+    ]
+    
     with pd.ExcelWriter(OUTPUT_OBSERVATION_3, engine='openpyxl') as writer:
         
         # ========== METHODOLOGY TAB ==========
@@ -1159,7 +1418,8 @@ if len(secondary_issue) > 0:
                 f'All applications tagged as "Key" in KPAs from {KPA_FILE}',
                 f'Documented methodology rule: "Secondary apps should be identified as a key application in at least one KPA"',
                 f'Current IT and IS risk ratings from {RISKS_FILE}',
-                f'ARA scores for all Secondary apps from {ARA_FILE}'
+                f'ARA scores for all Secondary apps from {ARA_FILE}',
+                f'L2 Key Risk mappings from {L2_MAPPING_FILE} to identify risk calculation pathways'
             ],
             data_sources={
                 'Source File 1: Audit Entity Risks': {
@@ -1179,6 +1439,12 @@ if len(secondary_issue) > 0:
                     'Records': methodology_doc['total_ara_records'],
                     'Key Columns Used': f'{ARA_APP_ID_COL}, {ARA_AVAILABILITY_COL}, {ARA_INTEGRITY_COL}, {ARA_CONFIDENTIALITY_COL}',
                     'Purpose': 'Risk scores to validate impact'
+                },
+                'Source File 4: L2 Key Risk Mappings': {
+                    'File Name': methodology_doc['l2_file'],
+                    'Records': len(l2_df),
+                    'Key Columns Used': f'{L2_AE_ID_COL}, {L2_KEY_RISK_COL}, {L2_L1_CATEGORIES_COL}',
+                    'Purpose': 'Determine which entities have IT/IS L2 pathways for risk calculation'
                 }
             },
             analysis_steps=[
@@ -1189,17 +1455,18 @@ if len(secondary_issue) > 0:
                 f'Retrieved current IT and IS risk from {RISKS_FILE}',
                 f'Retrieved ARA scores from {ARA_FILE} for Secondary not Key apps',
                 'Compared ARA scores of untagged apps to CURRENT system risk',
-                'Flagged "Possibly Understated" where untagged apps have higher risk than current',
-                'Flagged "Appears Correct" where untagged apps have same/lower risk'
+                f'Retrieved L2 Key Risk mappings from {L2_MAPPING_FILE}',
+                'Split entities by L2 availability: HIGH Priority (has L2s) vs MEDIUM Priority (needs L2s)',
+                'Flagged "Possibly Understated" where untagged apps have higher risk than current'
             ],
             output_interpretation={
                 'Secondary Apps Not Key': 'Apps mapped as Secondary but NOT tagged as Key - violates documented methodology',
                 'Methodology Rule': 'Secondary apps should be identified as a key application in at least one KPA',
                 'Severity': 'HIGH - Direct methodology violation + potential risk understatement',
                 'Possibly Understated': f'{len(secondary_higher_either)} entities where untagged apps have higher risk',
-                'Appears Correct': f'{len(secondary_issue) - len(secondary_higher_either)} entities where untagged apps have same/lower risk',
-                'IT Specific': f'{len(secondary_higher_it)} entities would have higher IT risk',
-                'IS Specific': f'{len(secondary_higher_is)} entities would have higher IS risk',
+                'HIGH Priority (has L2s)': f'{len(secondary_higher_either_with_l2)} entities - Tag apps as Key (immediate impact)',
+                'MEDIUM Priority (no L2s)': f'{len(secondary_higher_either_without_l2)} entities - Map L2s first, then tag apps',
+                'TWO-PART FIX': 'L2 mappings provide the pathway; Key tagging provides the content. BOTH required.',
                 'Next Steps': 'Systematic tagging of Secondary apps as Key per methodology'
             }
         )
@@ -1219,10 +1486,20 @@ if len(secondary_issue) > 0:
             {'Metric': 'Total Secondary apps NOT Key', 'Value': int(total_secondary_not_key)},
             {'Metric': '', 'Value': ''},
             {'Metric': 'ARA VALIDATION (vs CURRENT risk):', 'Value': ''},
-            {'Metric': 'Higher IT Risk than current', 'Value': len(secondary_higher_it)},
-            {'Metric': 'Higher IS Risk than current', 'Value': len(secondary_higher_is)},
-            {'Metric': 'Higher risk (either): POSSIBLY UNDERSTATED', 'Value': len(secondary_higher_either)},
-            {'Metric': 'Same/lower risk: Appears correct', 'Value': len(secondary_issue) - len(secondary_higher_either)},
+            {'Metric': 'Possibly understated (higher risk)', 'Value': len(secondary_higher_either)},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'PRIORITY BREAKDOWN (TWO-PART FIX):', 'Value': ''},
+            {'Metric': 'HIGH Priority (has relevant L2s)', 'Value': len(secondary_higher_either_with_l2)},
+            {'Metric': '  Fix', 'Value': 'Tag Secondary apps as Key per methodology'},
+            {'Metric': '  Impact', 'Value': 'IMMEDIATE (L2 pathway exists)'},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'MEDIUM Priority (missing relevant L2s)', 'Value': len(secondary_higher_either_without_l2)},
+            {'Metric': '  Fix 1', 'Value': 'Map L2 Key Risks FIRST'},
+            {'Metric': '  Fix 2', 'Value': 'Then tag Secondary apps as Key'},
+            {'Metric': '  Impact', 'Value': 'BOTH fixes needed'},
+            {'Metric': '', 'Value': ''},
+            {'Metric': 'ROOT CAUSE', 'Value': 'Missing L2 mappings (foundation) AND missing Key tagging (content)'},
+            {'Metric': 'BOTH must be addressed', 'Value': 'For accurate risk ratings'},
             {'Metric': '', 'Value': ''},
             {'Metric': 'See "Methodology" tab', 'Value': 'For complete analysis documentation'},
         ])
@@ -1232,12 +1509,19 @@ if len(secondary_issue) > 0:
         secondary_export = secondary_issue.sort_values('# Secondary Apps Not Key', ascending=False)
         secondary_export.to_excel(writer, sheet_name='All Secondary Not Key', index=False)
         
-        # ========== POSSIBLY UNDERSTATED TAB ==========
-        secondary_understated = secondary_higher_either.sort_values('# Secondary Apps Not Key', ascending=False)
-        secondary_understated.to_excel(writer, sheet_name='Possibly Understated (ARA)', index=False)
+        # ========== POSSIBLY UNDERSTATED - HIGH PRIORITY TAB ==========
+        if len(secondary_higher_either_with_l2) > 0:
+            secondary_high_priority = secondary_higher_either_with_l2.sort_values('# Secondary Apps Not Key', ascending=False)
+            secondary_high_priority.to_excel(writer, sheet_name='HIGH Priority (has L2s)', index=False)
+        
+        # ========== POSSIBLY UNDERSTATED - MEDIUM PRIORITY TAB ==========
+        if len(secondary_higher_either_without_l2) > 0:
+            secondary_medium_priority = secondary_higher_either_without_l2.sort_values('# Secondary Apps Not Key', ascending=False)
+            secondary_medium_priority.to_excel(writer, sheet_name='MEDIUM Priority (needs L2s)', index=False)
         
         # ========== NO RISK TAB ==========
-        secondary_no_risk.to_excel(writer, sheet_name='No Risk (Confirmed)', index=False)
+        if len(secondary_no_risk) > 0:
+            secondary_no_risk.to_excel(writer, sheet_name='No Risk (Confirmed)', index=False)
         
         # ========== BY TEAM AND LEADER TAB ==========
         if RISKS_CORE_TEAM_ACTUAL and RISKS_AUDIT_LEADER_ACTUAL:
@@ -1245,11 +1529,13 @@ if len(secondary_issue) > 0:
                 'Audit Entity ID': 'count',
                 '# Secondary Apps Not Key': 'sum',
                 'Secondary Not Key: Higher than Current IT': 'sum',
-                'Secondary Not Key: Higher than Current IS': 'sum'
+                'Secondary Not Key: Higher than Current IS': 'sum',
+                'Has IT L2 Mappings': 'sum',
+                'Has IS L2 Mappings': 'sum'
             }).reset_index()
-            team_leader_dist.columns = ['Core Audit Team', 'Audit Leader', '# Entities', 'Total Secondary Not Key', 'Higher IT Risk', 'Higher IS Risk']
-            team_leader_dist['Possibly Understated'] = team_leader_dist['Higher IT Risk'] + team_leader_dist['Higher IS Risk']
-            team_leader_dist = team_leader_dist.sort_values(['Core Audit Team', 'Possibly Understated'], ascending=[True, False])
+            team_leader_dist.columns = ['Core Audit Team', 'Audit Leader', '# Entities', 'Total Secondary Not Key',
+                                        'Higher IT Risk', 'Higher IS Risk', '# with IT L2s', '# with IS L2s']
+            team_leader_dist = team_leader_dist.sort_values(['Core Audit Team', '# Entities'], ascending=[True, False])
             team_leader_dist.to_excel(writer, sheet_name='By Team and Leader', index=False)
         elif RISKS_CORE_TEAM_ACTUAL:
             team_dist = secondary_issue.groupby('Core Audit Team').agg({
@@ -1280,6 +1566,7 @@ if len(all_auto_fail) > 0:
                 'Entities with Primary Key apps (apps mapped as Primary AND tagged as Key)',
                 'Entities with Secondary Key apps (apps mapped as Secondary AND tagged as Key)',
                 f'Current IT and IS risk applicability status from {RISKS_FILE}',
+                f'L2 Key Risk mappings from {L2_MAPPING_FILE}',
                 'Expected behavior: Key apps should automatically populate IT/IS risk'
             ],
             data_sources={
@@ -1294,6 +1581,12 @@ if len(all_auto_fail) > 0:
                     'Records': len(kpa_df),
                     'Key Columns Used': f'{KPA_AE_ID_COL}, {KPA_KEY_APPS_COL}',
                     'Purpose': 'Identify which apps are tagged as Key'
+                },
+                'Source File 3: L2 Key Risk Mappings': {
+                    'File Name': methodology_doc['l2_file'],
+                    'Records': len(l2_df),
+                    'Key Columns Used': f'{L2_AE_ID_COL}, {L2_KEY_RISK_COL}, {L2_L1_CATEGORIES_COL}',
+                    'Purpose': 'Determine if entities have L2 pathways for risk calculation'
                 }
             },
             analysis_steps=[
@@ -1303,14 +1596,16 @@ if len(all_auto_fail) > 0:
                 'Risk values considered "applicable": Critical, High, Medium, Low',
                 'Risk values considered "not applicable": N/A, blank, or any other value',
                 'Flagged entities with Key apps but NO IT/IS risk as automation failures',
-                'Separated into Primary Key failures and Secondary Key failures'
+                f'Cross-referenced with L2 mappings from {L2_MAPPING_FILE}',
+                'Note: Most "no risk" cases explained by missing L2 mappings (not automation failures)'
             ],
             output_interpretation={
                 'Automation Failure': 'Key apps exist but IT/IS risk NOT populated',
                 'Expected Behavior': 'When apps are tagged as Key, system should auto-populate risk from ARA scores',
+                'Total Entities': f'{len(all_auto_fail)} entities',
                 'Primary Key Failures': f'{len(primary_auto_fail)} entities',
                 'Secondary Key Failures': f'{len(secondary_auto_fail)} entities',
-                'Total Entities': f'{len(all_auto_fail)} entities',
+                'L2 Context': f'{neither_l2} entities have NO L2 mappings (explains most "no risk" cases)',
                 'Why High Priority': 'Risk should exist but is missing - automation not working as designed',
                 'Next Steps': 'Investigate with IT Applications team - check for timing issues, manual overrides, or system bugs'
             }
@@ -1333,6 +1628,10 @@ if len(all_auto_fail) > 0:
             {'Metric': '', 'Value': ''},
             {'Metric': 'Impact', 'Value': 'Risk should be populated but is not'},
             {'Metric': '', 'Value': ''},
+            {'Metric': 'L2 CONTEXT:', 'Value': ''},
+            {'Metric': f'{neither_l2} entities have NO L2 mappings', 'Value': 'This explains most "no risk" cases'},
+            {'Metric': 'Note', 'Value': 'Check if these 3 entities have L2s or N/A ARA scores'},
+            {'Metric': '', 'Value': ''},
             {'Metric': 'See "Methodology" tab', 'Value': 'For complete analysis documentation'},
         ])
         obs4_summary.to_excel(writer, sheet_name='Summary', index=False)
@@ -1349,7 +1648,7 @@ if len(all_auto_fail) > 0:
         if len(secondary_auto_fail) > 0:
             secondary_auto_fail.to_excel(writer, sheet_name='Secondary Key Failures', index=False)
         
-        # ========== BY TEAM AND LEADER TAB ==========
+        # ========== BYTEAM AND LEADER TAB ==========
         if RISKS_CORE_TEAM_ACTUAL and RISKS_AUDIT_LEADER_ACTUAL:
             team_leader_dist = all_auto_fail.groupby(['Core Audit Team', 'Audit Leader']).agg({
                 'Audit Entity ID': 'count',
@@ -1381,16 +1680,32 @@ if len(primary_issue) > 0:
         (primary_issue['Primary Not Key: Higher than Current IT'] == True) |
         (primary_issue['Primary Not Key: Higher than Current IS'] == True)
     ])
+    primary_higher_either_with_l2 = len(primary_issue[
+        ((primary_issue['Primary Not Key: Higher than Current IT'] == True) |
+         (primary_issue['Primary Not Key: Higher than Current IS'] == True)) &
+        ((primary_issue['Has IT L2 Mappings']) | (primary_issue['Has IS L2 Mappings']))
+    ])
+    primary_higher_either_without_l2 = primary_higher_either - primary_higher_either_with_l2
 else:
     primary_higher_either = 0
+    primary_higher_either_with_l2 = 0
+    primary_higher_either_without_l2 = 0
 
 if len(secondary_issue) > 0:
     secondary_higher_either = len(secondary_issue[
         (secondary_issue['Secondary Not Key: Higher than Current IT'] == True) |
         (secondary_issue['Secondary Not Key: Higher than Current IS'] == True)
     ])
+    secondary_higher_either_with_l2 = len(secondary_issue[
+        ((secondary_issue['Secondary Not Key: Higher than Current IT'] == True) |
+         (secondary_issue['Secondary Not Key: Higher than Current IS'] == True)) &
+        ((secondary_issue['Has IT L2 Mappings']) | (secondary_issue['Has IS L2 Mappings']))
+    ])
+    secondary_higher_either_without_l2 = secondary_higher_either - secondary_higher_either_with_l2
 else:
     secondary_higher_either = 0
+    secondary_higher_either_with_l2 = 0
+    secondary_higher_either_without_l2 = 0
 
 with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
     
@@ -1414,6 +1729,7 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
         {'Section': '  2.', 'Detail': 'Are all relevant applications tagged as "Key" per methodology?'},
         {'Section': '  3.', 'Detail': 'Do current risk ratings reflect actual application risk levels (per ARA)?'},
         {'Section': '  4.', 'Detail': 'Is the automation working as designed?'},
+        {'Section': '  5.', 'Detail': 'Are L2 Key Risk mappings in place to enable risk calculation?'},
         {'Section': '', 'Detail': ''},
         {'Section': '=' * 70, 'Detail': ''},
         {'Section': 'DATA SOURCES - ALL OBSERVATIONS', 'Detail': ''},
@@ -1425,7 +1741,6 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
         {'Section': '  Purpose', 'Detail': 'Master list of entities, risk ratings, and app mappings'},
         {'Section': '  Key Columns', 'Detail': f'{RISKS_AE_ID_COL}, {RISKS_IT_COL}, {RISKS_IS_COL}'},
         {'Section': '  Key Columns', 'Detail': f'{RISKS_PRIMARY_APPS_COL}, {RISKS_SECONDARY_APPS_COL}'},
-        {'Section': '  Key Columns', 'Detail': f'{RISKS_CORE_TEAM_COL}, {RISKS_AUDIT_LEADER_COL}'},
         {'Section': '', 'Detail': ''},
         {'Section': 'File 2: KPA Tagging', 'Detail': ''},
         {'Section': '  File Name', 'Detail': methodology_doc['kpa_file']},
@@ -1441,11 +1756,17 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
         {'Section': '  Key Columns', 'Detail': f'{ARA_APP_ID_COL}, {ARA_AVAILABILITY_COL}'},
         {'Section': '  Key Columns', 'Detail': f'{ARA_INTEGRITY_COL}, {ARA_CONFIDENTIALITY_COL}'},
         {'Section': '', 'Detail': ''},
+        {'Section': 'File 4: L2 Key Risk Mappings', 'Detail': ''},
+        {'Section': '  File Name', 'Detail': methodology_doc['l2_file']},
+        {'Section': '  Records', 'Detail': len(l2_df)},
+        {'Section': '  Purpose', 'Detail': 'L2 Key Risk mappings that establish RAI pathways for risk calculation'},
+        {'Section': '  Key Columns', 'Detail': f'{L2_AE_ID_COL}, {L2_KEY_RISK_COL}, {L2_L1_CATEGORIES_COL}'},
+        {'Section': '', 'Detail': ''},
         {'Section': '=' * 70, 'Detail': ''},
         {'Section': 'ANALYSIS APPROACH', 'Detail': ''},
         {'Section': '=' * 70, 'Detail': ''},
         {'Section': '', 'Detail': ''},
-        {'Section': 'Step 1: Data Integration', 'Detail': 'Combined all three data sources by entity ID and app ID'},
+        {'Section': 'Step 1: Data Integration', 'Detail': 'Combined all four data sources by entity ID and app ID'},
         {'Section': '', 'Detail': ''},
         {'Section': 'Step 2: Issue Identification', 'Detail': 'Identified four categories of issues:'},
         {'Section': '  Observation 1', 'Detail': 'Ghost Apps - apps in KPAs not mapped to entity'},
@@ -1453,15 +1774,45 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
         {'Section': '  Observation 3', 'Detail': 'Secondary apps not tagged as Key (methodology violation)'},
         {'Section': '  Observation 4', 'Detail': 'Automation failures - Key apps but no risk'},
         {'Section': '', 'Detail': ''},
-        {'Section': 'Step 3: ARA Validation', 'Detail': 'For each issue, validated impact using ARA scores:'},
+        {'Section': 'Step 3: L2 Key Risk Analysis', 'Detail': 'Analyzed L2 mappings to understand risk calculation pathways:'},
+        {'Section': '  IT L2 Mappings', 'Detail': f'{both_l2 + only_it_l2} entities have IT L2 Key Risks mapped'},
+        {'Section': '  IS L2 Mappings', 'Detail': f'{both_l2 + only_is_l2} entities have IS L2 Key Risks mapped'},
+        {'Section': '  No L2 Mappings', 'Detail': f'{neither_l2} entities have NO IT or IS L2 mappings'},
+        {'Section': '  Impact', 'Detail': 'Without L2 mappings, RAI cannot populate (no pathway for risk calculation)'},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'Step 4: ARA Validation', 'Detail': 'For each issue, validated impact using ARA scores:'},
         {'Section': '  IT Risk Calculation', 'Detail': 'max(Availability, Integrity) across apps'},
         {'Section': '  IS Risk Calculation', 'Detail': 'max(Confidentiality) across apps'},
         {'Section': '  Comparison Logic', 'Detail': 'Compared to CURRENT system risk (not expected)'},
         {'Section': '', 'Detail': ''},
-        {'Section': 'Step 4: Impact Assessment', 'Detail': 'Categorized findings:'},
+        {'Section': 'Step 5: Priority Classification', 'Detail': 'Categorized findings by L2 availability:'},
+        {'Section': '  HIGH Priority', 'Detail': 'Entity has relevant L2s → Tag apps as Key (immediate impact)'},
+        {'Section': '  MEDIUM Priority', 'Detail': 'Entity lacks L2s → Map L2s first, then tag apps'},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'Step 6: Impact Assessment', 'Detail': 'Categorized findings:'},
         {'Section': '  Ghost Apps', 'Detail': 'POSSIBLY MISSTATED (wrong apps - cannot validate without correct apps)'},
         {'Section': '  Apps Not Key', 'Detail': 'POSSIBLY UNDERSTATED (when untagged apps have higher risk than current)'},
         {'Section': '  Apps Not Key', 'Detail': 'APPEARS CORRECT (when untagged apps have same/lower risk)'},
+        {'Section': '', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+        {'Section': 'KEY FINDINGS: TWO-PART FIX REQUIRED', 'Detail': ''},
+        {'Section': '=' * 70, 'Detail': ''},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'Finding 1: L2 Key Risk Mappings', 'Detail': 'Foundation for risk calculation'},
+        {'Section': f'  {neither_l2} entities', 'Detail': 'Have NO IT or IS L2 mappings'},
+        {'Section': '  Impact', 'Detail': 'RAI cannot populate without L2 pathway'},
+        {'Section': '  Fix', 'Detail': 'Map relevant IT and IS L2 Key Risks to KPAs'},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'Finding 2: Key Application Tagging', 'Detail': 'Content for risk calculation'},
+        {'Section': f'  {len(primary_issue)} entities', 'Detail': 'Have Primary apps not tagged as Key'},
+        {'Section': f'  {len(secondary_issue)} entities', 'Detail': 'Have Secondary apps not tagged as Key'},
+        {'Section': '  Impact', 'Detail': 'Risk calculation missing input apps'},
+        {'Section': '  Fix', 'Detail': 'Review and tag relevant apps as Key in KPAs'},
+        {'Section': '', 'Detail': ''},
+        {'Section': 'BOTH FIXES ARE REQUIRED', 'Detail': ''},
+        {'Section': '  Without L2 mappings', 'Detail': 'No pathway → Even Key apps won\'t calculate risk'},
+        {'Section': '  Without Key tagging', 'Detail': 'No content → Even with L2s, risk has no input'},
+        {'Section': '  Order matters', 'Detail': 'Map L2s FIRST (pathway), then tag apps (content)'},
         {'Section': '', 'Detail': ''},
         {'Section': '=' * 70, 'Detail': ''},
         {'Section': 'KEY ASSUMPTIONS AND LIMITATIONS', 'Detail': ''},
@@ -1470,6 +1821,7 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
         {'Section': 'Assumption 1', 'Detail': 'ARA scores are current and accurate'},
         {'Section': 'Assumption 2', 'Detail': 'Application mappings in source file are correct'},
         {'Section': 'Assumption 3', 'Detail': 'Risk values Critical/High/Medium/Low indicate applicable risk'},
+        {'Section': 'Assumption 4', 'Detail': 'L2 Key Risk mappings are current and complete'},
         {'Section': '', 'Detail': ''},
         {'Section': 'Limitation 1', 'Detail': 'Cannot determine which apps SHOULD be Key without business context'},
         {'Section': 'Limitation 2', 'Detail': 'Cannot identify correct apps for ghost apps without investigation'},
@@ -1491,13 +1843,15 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
         {'Section': 'Observation 2: Primary Apps Not Key', 'Detail': ''},
         {'Section': '  Entities', 'Detail': len(primary_issue) if len(primary_issue) > 0 else 0},
         {'Section': '  Possibly Understated', 'Detail': primary_higher_either},
-        {'Section': '  Appears Correct', 'Detail': len(primary_issue) - primary_higher_either if len(primary_issue) > 0 else 0},
+        {'Section': '    HIGH Priority (has L2s)', 'Detail': primary_higher_either_with_l2},
+        {'Section': '    MEDIUM Priority (needs L2s)', 'Detail': primary_higher_either_without_l2},
         {'Section': '  Detail File', 'Detail': OUTPUT_OBSERVATION_2 if len(primary_issue) > 0 else 'N/A'},
         {'Section': '', 'Detail': ''},
         {'Section': 'Observation 3: Secondary Apps Not Key', 'Detail': ''},
         {'Section': '  Entities', 'Detail': len(secondary_issue) if len(secondary_issue) > 0 else 0},
         {'Section': '  Possibly Understated', 'Detail': secondary_higher_either},
-        {'Section': '  Appears Correct', 'Detail': len(secondary_issue) - secondary_higher_either if len(secondary_issue) > 0 else 0},
+        {'Section': '    HIGH Priority (has L2s)', 'Detail': secondary_higher_either_with_l2},
+        {'Section': '    MEDIUM Priority (needs L2s)', 'Detail': secondary_higher_either_without_l2},
         {'Section': '  Detail File', 'Detail': OUTPUT_OBSERVATION_3 if len(secondary_issue) > 0 else 'N/A'},
         {'Section': '', 'Detail': ''},
         {'Section': 'Observation 4: Automation Failures', 'Detail': ''},
@@ -1515,6 +1869,7 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
         {'Section': '   •', 'Detail': methodology_doc['risks_file']},
         {'Section': '   •', 'Detail': methodology_doc['kpa_file']},
         {'Section': '   •', 'Detail': methodology_doc['ara_file']},
+        {'Section': '   •', 'Detail': methodology_doc['l2_file']},
         {'Section': '', 'Detail': ''},
         {'Section': '2. Verify File Structure', 'Detail': ''},
         {'Section': '   • Ensure column names match configuration in script', 'Detail': ''},
@@ -1523,7 +1878,7 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
         {'Section': '', 'Detail': ''},
         {'Section': '3. Run Python Script', 'Detail': ''},
         {'Section': '   • Script name', 'Detail': '[To be filled in]'},
-        {'Section': '   • Script version', 'Detail': 'v1.0 - ' + methodology_doc['analysis_date']},
+        {'Section': '   • Script version', 'Detail': 'v2.0 - ' + methodology_doc['analysis_date']},
         {'Section': '   • Python version', 'Detail': '3.7 or higher'},
         {'Section': '   • Required libraries', 'Detail': 'pandas, openpyxl'},
         {'Section': '', 'Detail': ''},
@@ -1547,7 +1902,7 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
     # ========== EXECUTIVE SUMMARY TAB ==========
     exec_summary = pd.DataFrame([
         {'Metric': 'IT/IS RISK APPLICABILITY ANALYSIS', 'Value': '', 'Details': ''},
-        {'Metric': 'EXECUTIVE SUMMARY (ARA-Validated)', 'Value': '', 'Details': ''},
+        {'Metric': 'EXECUTIVE SUMMARY (ARA-Validated with L2 Context)', 'Value': '', 'Details': ''},
         {'Metric': 'Comparison: Apps vs CURRENT SYSTEM RISK', 'Value': '', 'Details': ''},
         {'Metric': '', 'Value': '', 'Details': ''},
         {'Metric': 'Analysis Date', 'Value': methodology_doc['analysis_date'], 'Details': ''},
@@ -1562,24 +1917,31 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
         {'Metric': '└─ Entities affected', 'Value': len(primary_issue) if len(primary_issue) > 0 else 0, 'Details': f"{len(primary_issue)/len(summary_df)*100:.1f}%" if len(primary_issue) > 0 else '0%'},
         {'Metric': '└─ Total Primary apps not Key', 'Value': int(total_primary_not_key) if len(primary_issue) > 0 else 0, 'Details': ''},
         {'Metric': '└─ ARA: Possibly understated', 'Value': primary_higher_either, 'Details': 'higher risk than current'},
-        {'Metric': '└─ ARA: Appears correct', 'Value': len(primary_issue) - primary_higher_either if len(primary_issue) > 0 else 0, 'Details': 'same/lower risk'},
+        {'Metric': '   └─ HIGH Priority (has L2s)', 'Value': primary_higher_either_with_l2, 'Details': 'immediate impact'},
+        {'Metric': '   └─ MEDIUM Priority (needs L2s)', 'Value': primary_higher_either_without_l2, 'Details': 'L2s + tagging'},
         {'Metric': '', 'Value': '', 'Details': ''},
         {'Metric': 'OBSERVATION 3: Secondary Apps Not Key', 'Value': '', 'Details': 'HIGH'},
         {'Metric': '└─ Entities affected', 'Value': len(secondary_issue) if len(secondary_issue) > 0 else 0, 'Details': f"{len(secondary_issue)/len(summary_df)*100:.1f}%" if len(secondary_issue) > 0 else '0%'},
         {'Metric': '└─ Total Secondary apps not Key', 'Value': int(total_secondary_not_key) if len(secondary_issue) > 0 else 0, 'Details': 'methodology violation'},
         {'Metric': '└─ ARA: Possibly understated', 'Value': secondary_higher_either, 'Details': 'higher risk than current'},
-        {'Metric': '└─ ARA: Appears correct', 'Value': len(secondary_issue) - secondary_higher_either if len(secondary_issue) > 0 else 0, 'Details': 'same/lower risk'},
+        {'Metric': '   └─ HIGH Priority (has L2s)', 'Value': secondary_higher_either_with_l2, 'Details': 'immediate impact'},
+        {'Metric': '   └─ MEDIUM Priority (needs L2s)', 'Value': secondary_higher_either_without_l2, 'Details': 'L2s + tagging'},
         {'Metric': '', 'Value': '', 'Details': ''},
         {'Metric': 'OBSERVATION 4: Automation Failures', 'Value': '', 'Details': 'HIGH'},
         {'Metric': '└─ Entities affected', 'Value': len(all_auto_fail) if len(all_auto_fail) > 0 else 0, 'Details': 'Key apps but no risk'},
         {'Metric': '', 'Value': '', 'Details': ''},
         {'Metric': 'TOTAL ENTITIES WITH ANY ISSUE', 'Value': len(summary_df[summary_df['ANY ISSUE']]), 'Details': f"{len(summary_df[summary_df['ANY ISSUE']])/len(summary_df)*100:.1f}%"},
         {'Metric': '', 'Value': '', 'Details': ''},
-        {'Metric': 'ARA-VALIDATED IMPACT SUMMARY', 'Value': '', 'Details': ''},
-        {'Metric': '└─ Possibly misstated (ghost apps)', 'Value': len(ghost_entities), 'Details': 'entities'},
-        {'Metric': '└─ Possibly understated (Primary not Key)', 'Value': primary_higher_either, 'Details': 'entities'},
-        {'Metric': '└─ Possibly understated (Secondary not Key)', 'Value': secondary_higher_either, 'Details': 'entities'},
-        {'Metric': 'TOTAL POSSIBLY MISSTATED RISK', 'Value': possibly_misstated_either, 'Details': f"{possibly_misstated_either/len(summary_df)*100:.1f}%"},
+        {'Metric': 'L2 KEY RISK CONTEXT', 'Value': '', 'Details': ''},
+        {'Metric': '└─ Both IT and IS L2s mapped', 'Value': both_l2, 'Details': f"{both_l2/len(summary_df)*100:.1f}%"},
+        {'Metric': '└─ Only IT L2s mapped', 'Value': only_it_l2, 'Details': f"{only_it_l2/len(summary_df)*100:.1f}%"},
+        {'Metric': '└─ Only IS L2s mapped', 'Value': only_is_l2, 'Details': f"{only_is_l2/len(summary_df)*100:.1f}%"},
+        {'Metric': '└─ NO IT or IS L2s mapped', 'Value': neither_l2, 'Details': f"{neither_l2/len(summary_df)*100:.1f}%"},
+        {'Metric': '', 'Value': '', 'Details': ''},
+        {'Metric': 'TWO-PART FIX REQUIRED', 'Value': '', 'Details': ''},
+        {'Metric': '1. L2 Key Risk Mappings (Foundation)', 'Value': f'{neither_l2} entities need L2s', 'Details': 'Establishes RAI pathway'},
+        {'Metric': '2. Key Application Tagging (Content)', 'Value': f'{len(summary_df[summary_df["ANY ISSUE"]])} entities need review', 'Details': 'Provides risk input'},
+        {'Metric': 'BOTH fixes required', 'Value': 'L2s provide pathway; Key tagging provides content', 'Details': ''},
         {'Metric': '', 'Value': '', 'Details': ''},
         {'Metric': 'See "Methodology" tab', 'Value': 'For complete analysis documentation', 'Details': ''},
     ])
@@ -1602,7 +1964,7 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
             'Entities': len(primary_issue) if len(primary_issue) > 0 else 0,
             '% of Total': f"{len(primary_issue)/len(summary_df)*100:.1f}%" if len(primary_issue) > 0 else '0%',
             'Apps Affected': int(total_primary_not_key) if len(primary_issue) > 0 else 0,
-            'ARA Assessment': f"{primary_higher_either} possibly understated, {len(primary_issue) - primary_higher_either if len(primary_issue) > 0 else 0} appear correct" if len(primary_issue) > 0 else 'None',
+            'ARA Assessment': f"HIGH Priority (has L2s): {primary_higher_either_with_l2}, MEDIUM Priority (needs L2s): {primary_higher_either_without_l2}" if len(primary_issue) > 0 else 'None',
             'File': OUTPUT_OBSERVATION_2 if len(primary_issue) > 0 else 'N/A'
         },
         {
@@ -1611,7 +1973,7 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
             'Entities': len(secondary_issue) if len(secondary_issue) > 0 else 0,
             '% of Total': f"{len(secondary_issue)/len(summary_df)*100:.1f}%" if len(secondary_issue) > 0 else '0%',
             'Apps Affected': int(total_secondary_not_key) if len(secondary_issue) > 0 else 0,
-            'ARA Assessment': f"{secondary_higher_either} possibly understated, {len(secondary_issue) - secondary_higher_either if len(secondary_issue) > 0 else 0} appear correct" if len(secondary_issue) > 0 else 'None',
+            'ARA Assessment': f"HIGH Priority (has L2s): {secondary_higher_either_with_l2}, MEDIUM Priority (needs L2s): {secondary_higher_either_without_l2}" if len(secondary_issue) > 0 else 'None',
             'File': OUTPUT_OBSERVATION_3 if len(secondary_issue) > 0 else 'N/A'
         },
         {
@@ -1639,7 +2001,9 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
             'Primary Not Key: Higher than Current IT': 'sum',
             'Primary Not Key: Higher than Current IS': 'sum',
             'Secondary Not Key: Higher than Current IT': 'sum',
-            'Secondary Not Key: Higher than Current IS': 'sum'
+            'Secondary Not Key: Higher than Current IS': 'sum',
+            'Has IT L2 Mappings': 'sum',
+            'Has IS L2 Mappings': 'sum'
         }).reset_index()
         
         team_leader_summary.columns = [
@@ -1655,7 +2019,9 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
             'Primary: Higher IT (ARA)',
             'Primary: Higher IS (ARA)',
             'Secondary: Higher IT (ARA)',
-            'Secondary: Higher IS (ARA)'
+            'Secondary: Higher IS (ARA)',
+            '# Entities with IT L2s',
+            '# Entities with IS L2s'
         ]
         
         team_leader_summary['Total Issues'] = (
@@ -1692,7 +2058,9 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
             'Primary Not Key: Higher than Current IT': 'sum',
             'Primary Not Key: Higher than Current IS': 'sum',
             'Secondary Not Key: Higher than Current IT': 'sum',
-            'Secondary Not Key: Higher than Current IS': 'sum'
+            'Secondary Not Key: Higher than Current IS': 'sum',
+            'Has IT L2 Mappings': 'sum',
+            'Has IS L2 Mappings': 'sum'
         }).reset_index()
         
         team_summary.columns = [
@@ -1707,7 +2075,9 @@ with pd.ExcelWriter(OUTPUT_EXECUTIVE_SUMMARY, engine='openpyxl') as writer:
             'Primary: Higher IT (ARA)',
             'Primary: Higher IS (ARA)',
             'Secondary: Higher IT (ARA)',
-            'Secondary: Higher IS (ARA)'
+            'Secondary: Higher IS (ARA)',
+            '# Entities with IT L2s',
+            '# Entities with IS L2s'
         ]
         
         team_summary['Total Issues'] = (
@@ -1743,6 +2113,14 @@ cols_order = [
     'Audit Entity ID',
     'Core Audit Team',
     'Audit Leader',
+    
+    # L2 MAPPINGS (NEW)
+    'Has IT L2 Mappings',
+    'Has IS L2 Mappings',
+    'Has Third Party L2 Mappings',
+    '# IT L2 Key Risks',
+    '# IS L2 Key Risks',
+    '# Third Party L2 Key Risks',
     
     # Flags
     'CRITICAL: Ghost Apps',
@@ -1800,6 +2178,11 @@ cols_order = [
     'Secondary Not Key IDs',
     'Key App Driving IT (incl ghosts)',
     'Key App Driving IS (incl ghosts)',
+    
+    # L2 detail
+    'IT L2 Risk Names',
+    'IS L2 Risk Names',
+    'Third Party L2 Risk Names',
 ]
 
 # Add remaining columns not in the order list
@@ -1831,7 +2214,7 @@ print(f"   {OUTPUT_FULL_ANALYSIS} (Complete dataset)")
 print(f"\n📁 Each observation file contains:")
 print(f"   - Methodology tab (FIRST - documents what was reviewed)")
 print(f"   - Summary tab (key metrics)")
-print(f"   - Analysis tabs (all data, ARA validation, samples)")
+print(f"   - Analysis tabs (all data, ARA validation, priority breakdown)")
 if RISKS_CORE_TEAM_ACTUAL and RISKS_AUDIT_LEADER_ACTUAL:
     print(f"   - By Team and Leader tab (accountability)")
 elif RISKS_CORE_TEAM_ACTUAL:
@@ -1849,9 +2232,21 @@ print(f"   Untagged apps: Possibly understated when higher than current")
 print(f"   {possibly_misstated_either} entities with possibly misstated risk")
 print(f"   IT and IS tracked separately throughout")
 
+print(f"\n✓ L2 KEY RISK CONTEXT ADDED")
+print(f"   {both_l2} entities have both IT and IS L2 mappings")
+print(f"   {neither_l2} entities have NO IT or IS L2 mappings")
+print(f"   Priority breakdown: HIGH (has L2s) vs MEDIUM (needs L2s)")
+print(f"   Two-part fix documented: L2 mappings + Key tagging")
+
 print(f"\n📋 TO REPERFORM THIS ANALYSIS:")
 print(f"   1. See 'Methodology' tab in {OUTPUT_EXECUTIVE_SUMMARY}")
 print(f"   2. Follow documented steps with source files")
 print(f"   3. Compare results to these outputs")
+
+print(f"\n🔑 KEY TAKEAWAY:")
+print(f"   TWO FIXES REQUIRED:")
+print(f"   1. L2 Key Risk Mappings (foundation/pathway)")
+print(f"   2. Key Application Tagging (content/input)")
+print(f"   BOTH must be addressed for accurate risk ratings")
 
 print("\n" + "="*70)
