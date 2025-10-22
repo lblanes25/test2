@@ -1,0 +1,532 @@
+"""
+SIMPLE IT/IS RISK ACCURACY CHECK WITH OVERALL IMPACT
+Version: 2.0
+
+PURPOSE:
+- Assess IT/IS risk accuracy per entity
+- Calculate impact on Overall Residual Risk
+- Show category movement and audit frequency impact
+
+OUTPUT:
+One Excel file with risk accuracy + overall impact analysis
+"""
+
+import pandas as pd
+import re
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+# Input files
+RISKS_FILE = "audit_entity_risks.xlsx"
+KPA_FILE = "kpa_tagging.xlsx"
+ARA_FILE = "all_applications.xlsx"
+
+# Column names in RISKS file
+RISKS_AE_ID_COL = "Audit Entity ID"
+RISKS_IT_COL = "Information Technology Inherent Risk"
+RISKS_IS_COL = "Information Security Inherent Risk"
+RISKS_PRIMARY_APPS_COL = "Primary IT applications (mapped)"
+RISKS_SECONDARY_APPS_COL = "Secondary IT applications (Related or Relied on)"
+
+# Column names in KPA file
+KPA_AE_ID_COL = "Audit Entity ID"
+KPA_KEY_APPS_COL = "KEY PRIMARY & SECONDARY IT applications"
+
+# Column names in ARA file
+ARA_APP_ID_COL = "Application Risk Assessment(ARA) Records (Centall Applications)"
+ARA_AVAILABILITY_COL = "Availability Risk"
+ARA_INTEGRITY_COL = "Integrity Risk"
+ARA_CONFIDENTIALITY_COL = "Confidentiality Risk"
+
+# Output
+OUTPUT_FILE = "Simple_Risk_Accuracy_With_Overall_Impact.xlsx"
+
+# =============================================================================
+# RISK CATEGORIES AND WEIGHTS
+# =============================================================================
+
+# The 14 risk categories with their weights
+RISK_CATEGORIES = {
+    'Credit': {'weight': 0.15, 'inherent_col': 'Credit Inherent Risk', 'residual_col': 'Credit Residual Risk', 'control_col': 'Credit Control Assessment'},
+    'Operational': {'weight': 0.125, 'inherent_col': 'Operational Inherent Risk', 'residual_col': 'Operational Residual Risk', 'control_col': 'Operational Control Assessment'},
+    'Third Party': {'weight': 0.05, 'inherent_col': 'Third Party Inherent Risk', 'residual_col': 'Third Party Residual Risk', 'control_col': 'Third Party Control Assessment'},
+    'Fraud': {'weight': 0.025, 'inherent_col': 'Fraud Inherent Risk', 'residual_col': 'Fraud Residual Risk', 'control_col': 'Fraud Control Assessment'},
+    'Financial Reporting': {'weight': 0.05, 'inherent_col': 'Financial Reporting Inherent Risk', 'residual_col': 'Financial Reporting Residual Risk', 'control_col': 'Financial Reporting Control Assessment'},
+    'Information Technology': {'weight': 0.075, 'inherent_col': 'Information Technology Inherent Risk', 'residual_col': 'Information Technology Residual Risk', 'control_col': 'Information Technology Control Assessment'},
+    'Information Security': {'weight': 0.075, 'inherent_col': 'Information Security Inherent Risk', 'residual_col': 'Information Security Residual Risk', 'control_col': 'Information Security Control Assessment'},
+    'Compliance': {'weight': 0.15, 'inherent_col': 'Compliance Inherent Risk', 'residual_col': 'Compliance Residual Risk', 'control_col': 'Compliance Control Assessment'},
+    'Model': {'weight': 0.05, 'inherent_col': 'Model Inherent Risk', 'residual_col': 'Model Residual Risk', 'control_col': 'Model Control Assessment'},
+    'Market & Asset Liability Management': {'weight': 0.05, 'inherent_col': 'Market & Asset Liability Management Inherent Risk', 'residual_col': 'Market & Asset Liability Management Residual Risk', 'control_col': 'Market & Asset Liability Management Control Assessment'},
+    'Liquidity': {'weight': 0.05, 'inherent_col': 'Liquidity Inherent Risk', 'residual_col': 'Liquidity Residual Risk', 'control_col': 'Liquidity Control Assessment'},
+    'Reputation & Brand': {'weight': 0.075, 'inherent_col': 'Reputation & Brand Inherent Risk', 'residual_col': 'Reputation & Brand Residual Risk', 'control_col': 'Reputation & Brand Control Assessment'},
+    'Strategic': {'weight': 0.05, 'inherent_col': 'Strategic Inherent Risk', 'residual_col': 'Strategic Residual Risk', 'control_col': 'Strategic Control Assessment'},
+    'Country Risk': {'weight': 0.03, 'inherent_col': 'Country Risk Inherent Risk', 'residual_col': 'Country Risk Residual Risk', 'control_col': 'Country Risk Control Assessment'}
+}
+
+# =============================================================================
+# RISK SCALES AND MAPPINGS
+# =============================================================================
+
+# Inherent and Residual Risk text to numeric
+RISK_NUMERIC = {
+    'Critical': 5,
+    'High': 3.75,
+    'Medium': 2.5,
+    'Low': 1.25,
+    'N/A': 0,
+    'Not Applicable': 0,
+    '': 0,
+    None: 0
+}
+
+# Overall Risk thresholds
+def get_risk_category(score):
+    """Convert numeric score to risk category"""
+    if pd.isna(score) or score == 0:
+        return 'Not Applicable'
+    elif score >= 4.6:
+        return 'Critical'
+    elif score >= 3.5:
+        return 'High'
+    elif score > 1.9:
+        return 'Medium'
+    else:
+        return 'Low'
+
+# Risk categories in order for movement calculation
+RISK_ORDER = ['Not Applicable', 'Low', 'Medium', 'High', 'Critical']
+
+# =============================================================================
+# CONTROL ASSESSMENT LOGIC
+# =============================================================================
+
+def calculate_residual_from_inherent_and_control(inherent_text, control_text):
+    """
+    Calculate residual risk from inherent risk and control assessment
+    Based on Table 3.5 from methodology documentation
+    """
+    inherent_num = RISK_NUMERIC.get(str(inherent_text).strip(), 0)
+    
+    if inherent_num == 0:
+        return 0
+    
+    control = str(control_text).strip() if pd.notna(control_text) else ''
+    
+    # Well Controlled
+    if control == 'Well Controlled':
+        if inherent_num == 1.25:  # Low
+            return 1.25
+        elif inherent_num == 2.5:  # Medium
+            return 1.25
+        elif inherent_num == 3.75:  # High
+            return 2.5
+        elif inherent_num == 5:  # Critical
+            return 3.75
+    
+    # Moderately Controlled
+    elif control == 'Moderately Controlled':
+        if inherent_num == 1.25:  # Low
+            return 1.25
+        elif inherent_num == 2.5:  # Medium
+            return 1.875
+        elif inherent_num == 3.75:  # High
+            return 3.125
+        elif inherent_num == 5:  # Critical
+            return 4.375
+    
+    # Insufficiently Controlled, N/A, New/Not Tested, or blank
+    # Residual = Inherent (no mitigation)
+    return inherent_num
+
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
+def find_column(df, target_col, optional=False):
+    col_map = {col.lower().strip(): col for col in df.columns}
+    actual_col = col_map.get(target_col.lower().strip())
+    if actual_col is None and not optional:
+        raise ValueError(f"Column '{target_col}' not found")
+    return actual_col
+
+def split_ids(value):
+    if pd.isna(value):
+        return []
+    ids = re.split(r'[\n,;]+', str(value).strip())
+    return [x.strip() for x in ids if x.strip()]
+
+def risk_text_to_numeric(risk_text):
+    """Convert risk text to numeric value"""
+    return RISK_NUMERIC.get(str(risk_text).strip(), 0)
+
+def calculate_it_risk(app_ids, ara_lookup):
+    """IT Risk = max(Availability, Integrity)"""
+    if not app_ids:
+        return 0, 'N/A'
+    
+    max_risk = 0
+    for app_id in app_ids:
+        if app_id and app_id in ara_lookup:
+            ara = ara_lookup[app_id]
+            avail = risk_text_to_numeric(ara['availability'])
+            integ = risk_text_to_numeric(ara['integrity'])
+            max_risk = max(max_risk, avail, integ)
+    
+    # Convert back to text
+    for text, num in RISK_NUMERIC.items():
+        if num == max_risk and text not in ['N/A', 'Not Applicable', '', None]:
+            return max_risk, text
+    return max_risk, 'N/A'
+
+def calculate_is_risk(app_ids, ara_lookup):
+    """IS Risk = max(Confidentiality)"""
+    if not app_ids:
+        return 0, 'N/A'
+    
+    max_risk = 0
+    for app_id in app_ids:
+        if app_id and app_id in ara_lookup:
+            ara = ara_lookup[app_id]
+            confid = risk_text_to_numeric(ara['confidentiality'])
+            max_risk = max(max_risk, confid)
+    
+    # Convert back to text
+    for text, num in RISK_NUMERIC.items():
+        if num == max_risk and text not in ['N/A', 'Not Applicable', '', None]:
+            return max_risk, text
+    return max_risk, 'N/A'
+
+# =============================================================================
+# LOAD DATA
+# =============================================================================
+
+print("="*70)
+print("LOADING DATA")
+print("="*70)
+
+risks_df = pd.read_excel(RISKS_FILE)
+kpa_df = pd.read_excel(KPA_FILE)
+ara_df = pd.read_excel(ARA_FILE)
+
+# Map columns
+RISKS_AE_ID_ACTUAL = find_column(risks_df, RISKS_AE_ID_COL)
+RISKS_IT_ACTUAL = find_column(risks_df, RISKS_IT_COL)
+RISKS_IS_ACTUAL = find_column(risks_df, RISKS_IS_COL)
+RISKS_PRIMARY_APPS_ACTUAL = find_column(risks_df, RISKS_PRIMARY_APPS_COL)
+RISKS_SECONDARY_APPS_ACTUAL = find_column(risks_df, RISKS_SECONDARY_APPS_COL)
+
+KPA_AE_ID_ACTUAL = find_column(kpa_df, KPA_AE_ID_COL)
+KPA_KEY_APPS_ACTUAL = find_column(kpa_df, KPA_KEY_APPS_COL)
+
+ARA_APP_ID_ACTUAL = find_column(ara_df, ARA_APP_ID_COL)
+ARA_AVAILABILITY_ACTUAL = find_column(ara_df, ARA_AVAILABILITY_COL)
+ARA_INTEGRITY_ACTUAL = find_column(ara_df, ARA_INTEGRITY_COL)
+ARA_CONFIDENTIALITY_ACTUAL = find_column(ara_df, ARA_CONFIDENTIALITY_COL)
+
+print(f"✓ Loaded {len(risks_df)} entities")
+print(f"✓ Loaded {len(kpa_df)} KPA records")
+print(f"✓ Loaded {len(ara_df)} ARA records")
+print()
+
+# =============================================================================
+# BUILD ARA LOOKUP
+# =============================================================================
+
+ara_lookup = {}
+for _, row in ara_df.iterrows():
+    app_id = str(row[ARA_APP_ID_ACTUAL]).strip()
+    ara_lookup[app_id] = {
+        'availability': row[ARA_AVAILABILITY_ACTUAL] if pd.notna(row[ARA_AVAILABILITY_ACTUAL]) else 'N/A',
+        'integrity': row[ARA_INTEGRITY_ACTUAL] if pd.notna(row[ARA_INTEGRITY_ACTUAL]) else 'N/A',
+        'confidentiality': row[ARA_CONFIDENTIALITY_ACTUAL] if pd.notna(row[ARA_CONFIDENTIALITY_ACTUAL]) else 'N/A'
+    }
+
+# =============================================================================
+# PARSE APPS
+# =============================================================================
+
+risks_df['Primary_List'] = risks_df[RISKS_PRIMARY_APPS_ACTUAL].apply(split_ids)
+risks_df['Secondary_List'] = risks_df[RISKS_SECONDARY_APPS_ACTUAL].apply(split_ids)
+
+kpa_df['Key_List'] = kpa_df[KPA_KEY_APPS_ACTUAL].apply(split_ids)
+kpa_key_map = (
+    kpa_df.groupby(KPA_AE_ID_ACTUAL)['Key_List']
+    .apply(lambda x: set([item for sublist in x for item in sublist]))
+    .to_dict()
+)
+
+# =============================================================================
+# MAP ALL RISK COLUMNS
+# =============================================================================
+
+print("Mapping risk category columns...")
+
+# Map actual column names
+for category, info in RISK_CATEGORIES.items():
+    info['inherent_col_actual'] = find_column(risks_df, info['inherent_col'], optional=True)
+    info['residual_col_actual'] = find_column(risks_df, info['residual_col'], optional=True)
+    info['control_col_actual'] = find_column(risks_df, info['control_col'], optional=True)
+
+print("✓ Mapped all risk category columns")
+print()
+
+# =============================================================================
+# ANALYZE EACH ENTITY
+# =============================================================================
+
+print("="*70)
+print("ANALYZING ENTITIES")
+print("="*70)
+print()
+
+results = []
+
+for idx, row in risks_df.iterrows():
+    ae_id = row[RISKS_AE_ID_ACTUAL]
+    
+    if idx % 50 == 0:
+        print(f"Processing entity {idx+1}/{len(risks_df)}...")
+    
+    # Get apps
+    primary_apps = row['Primary_List']
+    secondary_apps = row['Secondary_List']
+    all_mapped_apps = set(primary_apps + secondary_apps)
+    key_apps = kpa_key_map.get(ae_id, set())
+    
+    # Get current IT/IS inherent risk
+    current_it = row[RISKS_IT_ACTUAL]
+    current_is = row[RISKS_IS_ACTUAL]
+    
+    # Calculate what IT/IS SHOULD be based on ALL mapped apps
+    all_apps_list = list(all_mapped_apps)
+    should_it_num, should_it_text = calculate_it_risk(all_apps_list, ara_lookup)
+    should_is_num, should_is_text = calculate_is_risk(all_apps_list, ara_lookup)
+    
+    # Detect problems
+    problems = []
+    ghost_apps = [aid for aid in key_apps if aid and aid not in all_mapped_apps]
+    if ghost_apps:
+        problems.append(f"Ghost Apps ({len(ghost_apps)})")
+    
+    primary_not_key = [aid for aid in primary_apps if aid and aid not in key_apps]
+    secondary_not_key = [aid for aid in secondary_apps if aid and aid not in key_apps]
+    
+    if primary_not_key:
+        problems.append(f"Primary Not Key ({len(primary_not_key)})")
+    if secondary_not_key:
+        problems.append(f"Secondary Not Key ({len(secondary_not_key)})")
+    
+    if key_apps and risk_text_to_numeric(current_it) == 0 and risk_text_to_numeric(current_is) == 0:
+        problems.append(f"Automation Failure")
+    
+    # IT/IS accuracy
+    current_it_num = risk_text_to_numeric(current_it)
+    current_is_num = risk_text_to_numeric(current_is)
+    
+    if ghost_apps:
+        it_comparison = "POSSIBLY WRONG (ghost apps)"
+        is_comparison = "POSSIBLY WRONG (ghost apps)"
+        accuracy = "POSSIBLY MISSTATED"
+    else:
+        if should_it_num > current_it_num:
+            it_comparison = f"TOO LOW (should be {should_it_text})"
+        elif should_it_num < current_it_num:
+            it_comparison = f"TOO HIGH (should be {should_it_text})"
+        else:
+            it_comparison = "Correct"
+        
+        if should_is_num > current_is_num:
+            is_comparison = f"TOO LOW (should be {should_is_text})"
+        elif should_is_num < current_is_num:
+            is_comparison = f"TOO HIGH (should be {should_is_text})"
+        else:
+            is_comparison = "Correct"
+        
+        if should_it_num > current_it_num or should_is_num > current_is_num:
+            accuracy = "POSSIBLY UNDERSTATED"
+        elif should_it_num < current_it_num or should_is_num < current_is_num:
+            accuracy = "POSSIBLY OVERSTATED"
+        else:
+            accuracy = "Appears Correct"
+    
+    # =========================================================================
+    # CALCULATE OVERALL RESIDUAL RISK IMPACT
+    # =========================================================================
+    
+    # Step 1: Calculate CURRENT overall residual from existing residuals
+    current_overall_residual = 0
+    
+    for category, info in RISK_CATEGORIES.items():
+        if info['residual_col_actual']:
+            residual_text = row[info['residual_col_actual']]
+            residual_num = risk_text_to_numeric(residual_text)
+            current_overall_residual += residual_num * info['weight']
+    
+    current_overall_category = get_risk_category(current_overall_residual)
+    
+    # Step 2: Calculate NEW overall residual with corrected IT/IS
+    
+    # For the 12 unchanged risks, use their existing residuals
+    new_overall_residual = 0
+    
+    for category, info in RISK_CATEGORIES.items():
+        if category == 'Information Technology':
+            # Recalculate IT residual with corrected inherent
+            it_control = row[info['control_col_actual']] if info['control_col_actual'] else ''
+            new_it_residual = calculate_residual_from_inherent_and_control(should_it_text, it_control)
+            new_overall_residual += new_it_residual * info['weight']
+        
+        elif category == 'Information Security':
+            # Recalculate IS residual with corrected inherent
+            is_control = row[info['control_col_actual']] if info['control_col_actual'] else ''
+            new_is_residual = calculate_residual_from_inherent_and_control(should_is_text, is_control)
+            new_overall_residual += new_is_residual * info['weight']
+        
+        else:
+            # Use existing residual for unchanged risks
+            if info['residual_col_actual']:
+                residual_text = row[info['residual_col_actual']]
+                residual_num = risk_text_to_numeric(residual_text)
+                new_overall_residual += residual_num * info['weight']
+    
+    new_overall_category = get_risk_category(new_overall_residual)
+    
+    # Step 3: Calculate movement
+    try:
+        current_index = RISK_ORDER.index(current_overall_category)
+        new_index = RISK_ORDER.index(new_overall_category)
+        movement = new_index - current_index
+        
+        if movement > 0:
+            movement_text = f"Up {movement}"
+            category_movement = f"{current_overall_category} → {new_overall_category} ({movement_text})"
+        elif movement < 0:
+            movement_text = f"Down {abs(movement)}"
+            category_movement = f"{current_overall_category} → {new_overall_category} ({movement_text})"
+        else:
+            movement_text = "No Change"
+            category_movement = f"{current_overall_category} (No Change)"
+    except ValueError:
+        movement = 0
+        movement_text = "Unknown"
+        category_movement = f"{current_overall_category} → {new_overall_category}"
+    
+    # Audit frequency impact
+    audit_frequency_impact = "YES - Would change audit frequency" if movement != 0 else "NO"
+    
+    # Build result row
+    results.append({
+        'Audit Entity ID': ae_id,
+        'Problem': '; '.join(problems) if problems else 'None',
+        'Current IT Risk': current_it,
+        'Current IS Risk': current_is,
+        'Should Be IT Risk': should_it_text,
+        'Should Be IS Risk': should_is_text,
+        'IT Risk Accuracy': it_comparison,
+        'IS Risk Accuracy': is_comparison,
+        'Overall IT/IS Assessment': accuracy,
+        '# Ghost Apps': len(ghost_apps),
+        '# Primary Not Key': len(primary_not_key),
+        '# Secondary Not Key': len(secondary_not_key),
+        'Current Overall RR Score': round(current_overall_residual, 3),
+        'Current Overall RR Category': current_overall_category,
+        'New Overall RR Score': round(new_overall_residual, 3),
+        'New Overall RR Category': new_overall_category,
+        'Category Movement': category_movement,
+        '# Steps Moved': abs(movement),
+        'Audit Frequency Impact': audit_frequency_impact
+    })
+
+print(f"✓ Analyzed all {len(risks_df)} entities")
+print()
+
+# =============================================================================
+# CREATE OUTPUT
+# =============================================================================
+
+output_df = pd.DataFrame(results)
+
+# Sort: Issues first, then by movement magnitude
+output_df['Has_Issue'] = output_df['Problem'] != 'None'
+output_df = output_df.sort_values(['Has_Issue', '# Steps Moved', 'Overall IT/IS Assessment'], 
+                                   ascending=[False, False, True])
+output_df = output_df.drop(columns=['Has_Issue'])
+
+# Save
+output_df.to_excel(OUTPUT_FILE, index=False)
+
+# =============================================================================
+# SUMMARY STATS
+# =============================================================================
+
+print("="*70)
+print("ANALYSIS COMPLETE - SUMMARY")
+print("="*70)
+print()
+
+total = len(output_df)
+with_issues = len(output_df[output_df['Problem'] != 'None'])
+misstated = len(output_df[output_df['Overall IT/IS Assessment'] == 'POSSIBLY MISSTATED'])
+understated = len(output_df[output_df['Overall IT/IS Assessment'] == 'POSSIBLY UNDERSTATED'])
+overstated = len(output_df[output_df['Overall IT/IS Assessment'] == 'POSSIBLY OVERSTATED'])
+correct = len(output_df[output_df['Overall IT/IS Assessment'] == 'Appears Correct'])
+
+print(f"Total Entities: {total}")
+print()
+print(f"IT/IS Risk Accuracy Issues: {with_issues} ({with_issues/total*100:.1f}%)")
+print(f"  POSSIBLY MISSTATED:   {misstated:4d} ({misstated/total*100:.1f}%) - Ghost apps")
+print(f"  POSSIBLY UNDERSTATED: {understated:4d} ({understated/total*100:.1f}%) - Should be higher")
+print(f"  POSSIBLY OVERSTATED:  {overstated:4d} ({overstated/total*100:.1f}%) - Should be lower")
+print(f"  Appears Correct:      {correct:4d} ({correct/total*100:.1f}%)")
+print()
+
+# Overall RR Impact
+would_change = len(output_df[output_df['# Steps Moved'] > 0])
+would_not_change = len(output_df[output_df['# Steps Moved'] == 0])
+
+print("="*70)
+print("OVERALL RESIDUAL RISK IMPACT")
+print("="*70)
+print()
+print(f"Entities Where Overall Category Would Change: {would_change} ({would_change/total*100:.1f}%)")
+print(f"  → These would move to different audit frequency tier")
+print(f"  → HIGH PRIORITY for remediation")
+print()
+
+# Break down by movement type
+if would_change > 0:
+    print("Category Changes:")
+    
+    # Count up movements
+    up_1 = len(output_df[(output_df['# Steps Moved'] == 1) & (output_df['Category Movement'].str.contains('Up'))])
+    up_2 = len(output_df[(output_df['# Steps Moved'] == 2) & (output_df['Category Movement'].str.contains('Up'))])
+    up_3 = len(output_df[(output_df['# Steps Moved'] >= 3) & (output_df['Category Movement'].str.contains('Up'))])
+    
+    # Count down movements
+    down_1 = len(output_df[(output_df['# Steps Moved'] == 1) & (output_df['Category Movement'].str.contains('Down'))])
+    down_2 = len(output_df[(output_df['# Steps Moved'] == 2) & (output_df['Category Movement'].str.contains('Down'))])
+    down_3 = len(output_df[(output_df['# Steps Moved'] >= 3) & (output_df['Category Movement'].str.contains('Down'))])
+    
+    if up_1 > 0:
+        print(f"  Up 1 category:   {up_1:4d} entities")
+    if up_2 > 0:
+        print(f"  Up 2 categories: {up_2:4d} entities")
+    if up_3 > 0:
+        print(f"  Up 3+ categories: {up_3:4d} entities")
+    
+    if down_1 > 0:
+        print(f"  Down 1 category:   {down_1:4d} entities")
+    if down_2 > 0:
+        print(f"  Down 2 categories: {down_2:4d} entities")
+    if down_3 > 0:
+        print(f"  Down 3+ categories: {down_3:4d} entities")
+
+print()
+print(f"Entities Where Overall Category Stays Same: {would_not_change} ({would_not_change/total*100:.1f}%)")
+print()
+
+print(f"✓ Created {OUTPUT_FILE}")
+print()
+print("="*70)
