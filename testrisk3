@@ -1,10 +1,10 @@
 """
 SIMPLE IT/IS RISK ACCURACY CHECK WITH OVERALL IMPACT
-Version: 2.0
+Version: 3.0 - Uses Existing Overall Scores
 
 PURPOSE:
 - Assess IT/IS risk accuracy per entity
-- Calculate impact on Overall Residual Risk
+- Calculate impact on Overall Residual Risk using existing scores
 - Show category movement and audit frequency impact
 
 OUTPUT:
@@ -27,8 +27,12 @@ ARA_FILE = "all_applications.xlsx"
 RISKS_AE_ID_COL = "Audit Entity ID"
 RISKS_IT_COL = "Information Technology Inherent Risk"
 RISKS_IS_COL = "Information Security Inherent Risk"
+RISKS_IT_CONTROL_COL = "Information Technology Control Assessment"
+RISKS_IS_CONTROL_COL = "Information Security Control Assessment"
 RISKS_PRIMARY_APPS_COL = "Primary IT applications (mapped)"
 RISKS_SECONDARY_APPS_COL = "Secondary IT applications (Related or Relied on)"
+RISKS_AUDIT_INHERENT_SCORE_COL = "Audit Inherent Risk Score"
+RISKS_AUDIT_RESIDUAL_SCORE_COL = "Audit Residual Risk Score"
 
 # Column names in KPA file
 KPA_AE_ID_COL = "Audit Entity ID"
@@ -43,27 +47,9 @@ ARA_CONFIDENTIALITY_COL = "Confidentiality Risk"
 # Output
 OUTPUT_FILE = "Simple_Risk_Accuracy_With_Overall_Impact.xlsx"
 
-# =============================================================================
-# RISK CATEGORIES AND WEIGHTS
-# =============================================================================
-
-# The 14 risk categories with their weights
-RISK_CATEGORIES = {
-    'Credit': {'weight': 0.15, 'inherent_col': 'Credit Inherent Risk', 'residual_col': 'Credit Residual Risk', 'control_col': 'Credit Control Assessment'},
-    'Operational': {'weight': 0.125, 'inherent_col': 'Operational Inherent Risk', 'residual_col': 'Operational Residual Risk', 'control_col': 'Operational Control Assessment'},
-    'Third Party': {'weight': 0.05, 'inherent_col': 'Third Party Inherent Risk', 'residual_col': 'Third Party Residual Risk', 'control_col': 'Third Party Control Assessment'},
-    'Fraud': {'weight': 0.025, 'inherent_col': 'Fraud Inherent Risk', 'residual_col': 'Fraud Residual Risk', 'control_col': 'Fraud Control Assessment'},
-    'Financial Reporting': {'weight': 0.05, 'inherent_col': 'Financial Reporting Inherent Risk', 'residual_col': 'Financial Reporting Residual Risk', 'control_col': 'Financial Reporting Control Assessment'},
-    'Information Technology': {'weight': 0.075, 'inherent_col': 'Information Technology Inherent Risk', 'residual_col': 'Information Technology Residual Risk', 'control_col': 'Information Technology Control Assessment'},
-    'Information Security': {'weight': 0.075, 'inherent_col': 'Information Security Inherent Risk', 'residual_col': 'Information Security Residual Risk', 'control_col': 'Information Security Control Assessment'},
-    'Compliance': {'weight': 0.15, 'inherent_col': 'Compliance Inherent Risk', 'residual_col': 'Compliance Residual Risk', 'control_col': 'Compliance Control Assessment'},
-    'Model': {'weight': 0.05, 'inherent_col': 'Model Inherent Risk', 'residual_col': 'Model Residual Risk', 'control_col': 'Model Control Assessment'},
-    'Market & Asset Liability Management': {'weight': 0.05, 'inherent_col': 'Market & Asset Liability Management Inherent Risk', 'residual_col': 'Market & Asset Liability Management Residual Risk', 'control_col': 'Market & Asset Liability Management Control Assessment'},
-    'Liquidity': {'weight': 0.05, 'inherent_col': 'Liquidity Inherent Risk', 'residual_col': 'Liquidity Residual Risk', 'control_col': 'Liquidity Control Assessment'},
-    'Reputation & Brand': {'weight': 0.075, 'inherent_col': 'Reputation & Brand Inherent Risk', 'residual_col': 'Reputation & Brand Residual Risk', 'control_col': 'Reputation & Brand Control Assessment'},
-    'Strategic': {'weight': 0.05, 'inherent_col': 'Strategic Inherent Risk', 'residual_col': 'Strategic Residual Risk', 'control_col': 'Strategic Control Assessment'},
-    'Country Risk': {'weight': 0.03, 'inherent_col': 'Country Risk Inherent Risk', 'residual_col': 'Country Risk Residual Risk', 'control_col': 'Country Risk Control Assessment'}
-}
+# IT and IS weights in overall calculation
+IT_WEIGHT = 0.075  # 7.5%
+IS_WEIGHT = 0.075  # 7.5%
 
 # =============================================================================
 # RISK SCALES AND MAPPINGS
@@ -106,6 +92,15 @@ def calculate_residual_from_inherent_and_control(inherent_text, control_text):
     """
     Calculate residual risk from inherent risk and control assessment
     Based on Table 3.5 from methodology documentation
+    
+    Well Controlled:
+      Low → Low (1.25), Medium → Low (1.25), High → Medium (2.5), Critical → High (3.75)
+    
+    Moderately Controlled:
+      Low → Low (1.25), Medium → Medium/Low (1.875), High → High/Medium (3.125), Critical → Critical/High (4.375)
+    
+    Insufficiently Controlled, N/A, New/Not Tested, or blank:
+      Residual = Inherent (no mitigation)
     """
     inherent_num = RISK_NUMERIC.get(str(inherent_text).strip(), 0)
     
@@ -148,7 +143,7 @@ def find_column(df, target_col, optional=False):
     col_map = {col.lower().strip(): col for col in df.columns}
     actual_col = col_map.get(target_col.lower().strip())
     if actual_col is None and not optional:
-        raise ValueError(f"Column '{target_col}' not found")
+        raise ValueError(f"Column '{target_col}' not found. Available: {list(df.columns)[:10]}...")
     return actual_col
 
 def split_ids(value):
@@ -214,8 +209,12 @@ ara_df = pd.read_excel(ARA_FILE)
 RISKS_AE_ID_ACTUAL = find_column(risks_df, RISKS_AE_ID_COL)
 RISKS_IT_ACTUAL = find_column(risks_df, RISKS_IT_COL)
 RISKS_IS_ACTUAL = find_column(risks_df, RISKS_IS_COL)
+RISKS_IT_CONTROL_ACTUAL = find_column(risks_df, RISKS_IT_CONTROL_COL)
+RISKS_IS_CONTROL_ACTUAL = find_column(risks_df, RISKS_IS_CONTROL_COL)
 RISKS_PRIMARY_APPS_ACTUAL = find_column(risks_df, RISKS_PRIMARY_APPS_COL)
 RISKS_SECONDARY_APPS_ACTUAL = find_column(risks_df, RISKS_SECONDARY_APPS_COL)
+RISKS_AUDIT_INHERENT_SCORE_ACTUAL = find_column(risks_df, RISKS_AUDIT_INHERENT_SCORE_COL)
+RISKS_AUDIT_RESIDUAL_SCORE_ACTUAL = find_column(risks_df, RISKS_AUDIT_RESIDUAL_SCORE_COL)
 
 KPA_AE_ID_ACTUAL = find_column(kpa_df, KPA_AE_ID_COL)
 KPA_KEY_APPS_ACTUAL = find_column(kpa_df, KPA_KEY_APPS_COL)
@@ -258,21 +257,6 @@ kpa_key_map = (
 )
 
 # =============================================================================
-# MAP ALL RISK COLUMNS
-# =============================================================================
-
-print("Mapping risk category columns...")
-
-# Map actual column names
-for category, info in RISK_CATEGORIES.items():
-    info['inherent_col_actual'] = find_column(risks_df, info['inherent_col'], optional=True)
-    info['residual_col_actual'] = find_column(risks_df, info['residual_col'], optional=True)
-    info['control_col_actual'] = find_column(risks_df, info['control_col'], optional=True)
-
-print("✓ Mapped all risk category columns")
-print()
-
-# =============================================================================
 # ANALYZE EACH ENTITY
 # =============================================================================
 
@@ -286,7 +270,7 @@ results = []
 for idx, row in risks_df.iterrows():
     ae_id = row[RISKS_AE_ID_ACTUAL]
     
-    if idx % 50 == 0:
+    if (idx + 1) % 50 == 0:
         print(f"Processing entity {idx+1}/{len(risks_df)}...")
     
     # Get apps
@@ -298,6 +282,10 @@ for idx, row in risks_df.iterrows():
     # Get current IT/IS inherent risk
     current_it = row[RISKS_IT_ACTUAL]
     current_is = row[RISKS_IS_ACTUAL]
+    
+    # Get control assessments
+    it_control = row[RISKS_IT_CONTROL_ACTUAL] if pd.notna(row[RISKS_IT_CONTROL_ACTUAL]) else ''
+    is_control = row[RISKS_IS_CONTROL_ACTUAL] if pd.notna(row[RISKS_IS_CONTROL_ACTUAL]) else ''
     
     # Calculate what IT/IS SHOULD be based on ALL mapped apps
     all_apps_list = list(all_mapped_apps)
@@ -318,13 +306,13 @@ for idx, row in risks_df.iterrows():
     if secondary_not_key:
         problems.append(f"Secondary Not Key ({len(secondary_not_key)})")
     
-    if key_apps and risk_text_to_numeric(current_it) == 0 and risk_text_to_numeric(current_is) == 0:
-        problems.append(f"Automation Failure")
-    
-    # IT/IS accuracy
     current_it_num = risk_text_to_numeric(current_it)
     current_is_num = risk_text_to_numeric(current_is)
     
+    if key_apps and current_it_num == 0 and current_is_num == 0:
+        problems.append(f"Automation Failure")
+    
+    # IT/IS accuracy
     if ghost_apps:
         it_comparison = "POSSIBLY WRONG (ghost apps)"
         is_comparison = "POSSIBLY WRONG (ghost apps)"
@@ -352,48 +340,59 @@ for idx, row in risks_df.iterrows():
             accuracy = "Appears Correct"
     
     # =========================================================================
-    # CALCULATE OVERALL RESIDUAL RISK IMPACT
+    # CALCULATE OVERALL IMPACT USING EXISTING SCORES
     # =========================================================================
     
-    # Step 1: Calculate CURRENT overall residual from existing residuals
-    current_overall_residual = 0
+    # Read existing overall scores
+    current_audit_inherent_score = row[RISKS_AUDIT_INHERENT_SCORE_ACTUAL]
+    current_audit_residual_score = row[RISKS_AUDIT_RESIDUAL_SCORE_ACTUAL]
     
-    for category, info in RISK_CATEGORIES.items():
-        if info['residual_col_actual']:
-            residual_text = row[info['residual_col_actual']]
-            residual_num = risk_text_to_numeric(residual_text)
-            current_overall_residual += residual_num * info['weight']
+    # Handle missing scores
+    if pd.isna(current_audit_inherent_score):
+        current_audit_inherent_score = 0
+    if pd.isna(current_audit_residual_score):
+        current_audit_residual_score = 0
     
-    current_overall_category = get_risk_category(current_overall_residual)
+    # Step 1: Calculate CURRENT IT/IS contributions to overall
+    current_it_inherent_contribution = current_it_num * IT_WEIGHT
+    current_is_inherent_contribution = current_is_num * IS_WEIGHT
     
-    # Step 2: Calculate NEW overall residual with corrected IT/IS
+    current_it_residual_num = calculate_residual_from_inherent_and_control(current_it, it_control)
+    current_is_residual_num = calculate_residual_from_inherent_and_control(current_is, is_control)
     
-    # For the 12 unchanged risks, use their existing residuals
-    new_overall_residual = 0
+    current_it_residual_contribution = current_it_residual_num * IT_WEIGHT
+    current_is_residual_contribution = current_is_residual_num * IS_WEIGHT
     
-    for category, info in RISK_CATEGORIES.items():
-        if category == 'Information Technology':
-            # Recalculate IT residual with corrected inherent
-            it_control = row[info['control_col_actual']] if info['control_col_actual'] else ''
-            new_it_residual = calculate_residual_from_inherent_and_control(should_it_text, it_control)
-            new_overall_residual += new_it_residual * info['weight']
-        
-        elif category == 'Information Security':
-            # Recalculate IS residual with corrected inherent
-            is_control = row[info['control_col_actual']] if info['control_col_actual'] else ''
-            new_is_residual = calculate_residual_from_inherent_and_control(should_is_text, is_control)
-            new_overall_residual += new_is_residual * info['weight']
-        
-        else:
-            # Use existing residual for unchanged risks
-            if info['residual_col_actual']:
-                residual_text = row[info['residual_col_actual']]
-                residual_num = risk_text_to_numeric(residual_text)
-                new_overall_residual += residual_num * info['weight']
+    # Step 2: Calculate NEW IT/IS contributions with corrected inherent
+    new_it_inherent_contribution = should_it_num * IT_WEIGHT
+    new_is_inherent_contribution = should_is_num * IS_WEIGHT
     
-    new_overall_category = get_risk_category(new_overall_residual)
+    new_it_residual_num = calculate_residual_from_inherent_and_control(should_it_text, it_control)
+    new_is_residual_num = calculate_residual_from_inherent_and_control(should_is_text, is_control)
     
-    # Step 3: Calculate movement
+    new_it_residual_contribution = new_it_residual_num * IT_WEIGHT
+    new_is_residual_contribution = new_is_residual_num * IS_WEIGHT
+    
+    # Step 3: Calculate changes
+    inherent_change = (
+        (new_it_inherent_contribution - current_it_inherent_contribution) +
+        (new_is_inherent_contribution - current_is_inherent_contribution)
+    )
+    
+    residual_change = (
+        (new_it_residual_contribution - current_it_residual_contribution) +
+        (new_is_residual_contribution - current_is_residual_contribution)
+    )
+    
+    # Step 4: Apply changes to existing overall scores
+    new_audit_inherent_score = current_audit_inherent_score + inherent_change
+    new_audit_residual_score = current_audit_residual_score + residual_change
+    
+    # Step 5: Determine categories
+    current_overall_category = get_risk_category(current_audit_residual_score)
+    new_overall_category = get_risk_category(new_audit_residual_score)
+    
+    # Step 6: Calculate movement
     try:
         current_index = RISK_ORDER.index(current_overall_category)
         new_index = RISK_ORDER.index(new_overall_category)
@@ -430,10 +429,12 @@ for idx, row in risks_df.iterrows():
         '# Ghost Apps': len(ghost_apps),
         '# Primary Not Key': len(primary_not_key),
         '# Secondary Not Key': len(secondary_not_key),
-        'Current Overall RR Score': round(current_overall_residual, 3),
-        'Current Overall RR Category': current_overall_category,
-        'New Overall RR Score': round(new_overall_residual, 3),
-        'New Overall RR Category': new_overall_category,
+        'Current Audit Inherent Score': round(current_audit_inherent_score, 3),
+        'New Audit Inherent Score': round(new_audit_inherent_score, 3),
+        'Current Audit Residual Score': round(current_audit_residual_score, 3),
+        'Current Overall Category': current_overall_category,
+        'New Audit Residual Score': round(new_audit_residual_score, 3),
+        'New Overall Category': new_overall_category,
         'Category Movement': category_movement,
         '# Steps Moved': abs(movement),
         'Audit Frequency Impact': audit_frequency_impact
@@ -482,7 +483,7 @@ print(f"  POSSIBLY OVERSTATED:  {overstated:4d} ({overstated/total*100:.1f}%) - 
 print(f"  Appears Correct:      {correct:4d} ({correct/total*100:.1f}%)")
 print()
 
-# Overall RR Impact
+# Overall Impact
 would_change = len(output_df[output_df['# Steps Moved'] > 0])
 would_not_change = len(output_df[output_df['# Steps Moved'] == 0])
 
@@ -500,21 +501,21 @@ if would_change > 0:
     print("Category Changes:")
     
     # Count up movements
-    up_1 = len(output_df[(output_df['# Steps Moved'] == 1) & (output_df['Category Movement'].str.contains('Up'))])
-    up_2 = len(output_df[(output_df['# Steps Moved'] == 2) & (output_df['Category Movement'].str.contains('Up'))])
-    up_3 = len(output_df[(output_df['# Steps Moved'] >= 3) & (output_df['Category Movement'].str.contains('Up'))])
+    up_1 = len(output_df[(output_df['# Steps Moved'] == 1) & (output_df['Category Movement'].str.contains('Up', na=False))])
+    up_2 = len(output_df[(output_df['# Steps Moved'] == 2) & (output_df['Category Movement'].str.contains('Up', na=False))])
+    up_3 = len(output_df[(output_df['# Steps Moved'] >= 3) & (output_df['Category Movement'].str.contains('Up', na=False))])
     
     # Count down movements
-    down_1 = len(output_df[(output_df['# Steps Moved'] == 1) & (output_df['Category Movement'].str.contains('Down'))])
-    down_2 = len(output_df[(output_df['# Steps Moved'] == 2) & (output_df['Category Movement'].str.contains('Down'))])
-    down_3 = len(output_df[(output_df['# Steps Moved'] >= 3) & (output_df['Category Movement'].str.contains('Down'))])
+    down_1 = len(output_df[(output_df['# Steps Moved'] == 1) & (output_df['Category Movement'].str.contains('Down', na=False))])
+    down_2 = len(output_df[(output_df['# Steps Moved'] == 2) & (output_df['Category Movement'].str.contains('Down', na=False))])
+    down_3 = len(output_df[(output_df['# Steps Moved'] >= 3) & (output_df['Category Movement'].str.contains('Down', na=False))])
     
     if up_1 > 0:
-        print(f"  Up 1 category:   {up_1:4d} entities")
+        print(f"  Up 1 category:     {up_1:4d} entities")
     if up_2 > 0:
-        print(f"  Up 2 categories: {up_2:4d} entities")
+        print(f"  Up 2 categories:   {up_2:4d} entities")
     if up_3 > 0:
-        print(f"  Up 3+ categories: {up_3:4d} entities")
+        print(f"  Up 3+ categories:  {up_3:4d} entities")
     
     if down_1 > 0:
         print(f"  Down 1 category:   {down_1:4d} entities")
@@ -525,8 +526,11 @@ if would_change > 0:
 
 print()
 print(f"Entities Where Overall Category Stays Same: {would_not_change} ({would_not_change/total*100:.1f}%)")
+print(f"  (Risk accuracy issues may still exist)")
 print()
 
 print(f"✓ Created {OUTPUT_FILE}")
 print()
+print("="*70)
+print("DONE!")
 print("="*70)
